@@ -1,0 +1,12 @@
+[package]
+name = "claimlib"
+version = "0.1.0"
+authors = ["Andrew Danger Lyon <andrew@killtheradio.net>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+stamp-core = { path = "../core" }
+ureq = "2.0.1"
+
