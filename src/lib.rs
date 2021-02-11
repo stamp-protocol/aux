@@ -7,6 +7,8 @@
 //! the claim information is posted somewhere publicly in a location of a
 //! system in which we know the protocol. Think, HTTP/DNS.
 
+use resolve::{DnsConfig, DnsResolver};
+use resolve::record::Txt;
 use stamp_core::{
     identity::{IdentityID, ClaimID, ClaimSpec, Claim},
 };
@@ -23,7 +25,30 @@ pub fn check(identity_id: &IdentityID, claim: &Claim) -> Result<String, String> 
     match claim.spec() {
         ClaimSpec::Domain(maybe) => {
             let domain = maybe.open_public().ok_or(format!("This claim is private, but must be public to be checked."))?;
-            unimplemented!();
+            let config = DnsConfig::load_default()
+                .map_err(|e| format!("Problem loading DNS configuration: {}", e))?;
+            let resolver = DnsResolver::new(config)
+                .map_err(|e| format!("Problem creating DNS resolver: {}", e))?;
+            let records = resolver.resolve_record::<Txt>(&domain)
+                .map_err(|e| format!("Problem reading DNS records: {}", e))?;
+            let mut found = false;
+            for record in records {
+                let body = match String::from_utf8(record.data.clone()) {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
+                for val in &instant_values {
+                    if body.contains(val) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found {
+                Ok(domain)
+            } else {
+                Err(format!("The domain {} does not contain any of the required values for verification", domain))
+            }
         }
         ClaimSpec::Url(maybe) => {
             let url = maybe.open_public().ok_or(format!("This claim is private, but must be public to be checked."))?;
