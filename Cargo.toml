@@ -1,5 +1,5 @@
 [package]
-name = "claimlib"
+name = "aux"
 version = "0.1.0"
 authors = ["Andrew Danger Lyon <andrew@killtheradio.net>"]
 edition = "2018"
