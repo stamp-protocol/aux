@@ -18,7 +18,6 @@ use stamp_core::{
     dag::Transactions,
     identity::{
         Claim,
-        ClaimBin,
         ClaimContainer,
         ClaimSpec,
         IdentityID,
@@ -26,7 +25,8 @@ use stamp_core::{
         RelationshipType,
     },
     private::MaybePrivate,
-    util::{Timestamp, Date},
+    rasn::{Encode, Decode},
+    util::{Timestamp, Date, BinaryVec, Url},
 };
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -40,7 +40,7 @@ fn claim_post(master_key: &SecretKey, transactions: Transactions, spec: ClaimSpe
 }
 
 fn maybe_private<T>(master_key: &SecretKey, private: bool, value: T) -> Result<MaybePrivate<T>>
-where T: Clone + serde::ser::Serialize + serde::de::DeserializeOwned
+    where T: Clone + Encode + Decode,
 {
     let maybe = if private {
         MaybePrivate::new_private(&master_key, value)?
@@ -79,7 +79,7 @@ pub fn new_photo(master_key: &SecretKey, transactions: Transactions, photo_bytes
     if photo_bytes.len() > MAX_PHOTO_BYTES {
         Err(Error::TooBig(format!("Please choose a photo smaller than {} bytes (given photo is {} bytes)", MAX_PHOTO_BYTES, photo_bytes.len())))?;
     }
-    let maybe = maybe_private(&master_key, private, ClaimBin::from(photo_bytes))?;
+    let maybe = maybe_private(&master_key, private, BinaryVec::from(photo_bytes))?;
     let spec = ClaimSpec::Photo(maybe);
     claim_post(&master_key, transactions, spec)
 }
@@ -97,7 +97,7 @@ pub fn new_domain(master_key: &SecretKey, transactions: Transactions, value: Str
 }
 
 pub fn new_url(master_key: &SecretKey, transactions: Transactions, value: String, private: bool) -> Result<Transactions> {
-    let url = url::Url::parse(&value)?;
+    let url = Url::parse(&value)?;
     let maybe = maybe_private(&master_key, private, url)?;
     let spec = ClaimSpec::Url(maybe);
     claim_post(&master_key, transactions, spec)
@@ -167,7 +167,7 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
         }
         ClaimSpec::Url(maybe) => {
             let url = maybe.open_public().ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
-            let body = ureq::get(&url.clone().into_string())
+            let body = ureq::get(&String::from(url.clone()))
                 .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .set("Accept-Language", "en-US,en;q=0.5")
                 .set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:84.0) Gecko/20100101 Firefox/84.0")
@@ -192,7 +192,7 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
                 }
             }
             if found {
-                Ok(url.into_string())
+                Ok(url.into())
             } else {
                 Err(Error::ClaimCheckFail(format!("The URL {} does not contain any of the required values for verification", url)))
             }

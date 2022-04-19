@@ -18,6 +18,7 @@ pub struct Config {
 /// Load the local configuration.
 pub fn load() -> Result<Config> {
     let data_dir = util::config_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
     let mut config_file = data_dir.clone();
     config_file.push("config.toml");
     let config = match File::open(&config_file) {
@@ -45,6 +46,7 @@ pub fn load() -> Result<Config> {
 /// Save the current configuration.
 pub fn save(config: &Config) -> Result<()> {
     let data_dir = util::config_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
     let mut config_file = data_dir.clone();
     config_file.push("config.toml");
     let serialized = toml::to_string_pretty(config)

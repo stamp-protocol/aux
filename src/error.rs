@@ -58,10 +58,6 @@ pub enum Error {
     /// A value or file provided is too large
     #[error("file/value provided is too large: {0}")]
     TooBig(String),
-
-    /// URL parsing/formatting error
-    #[error("URL error: {0}")]
-    Url(#[from] url::ParseError),
 }
 
 /// Wraps `std::result::Result` around our `Error` enum

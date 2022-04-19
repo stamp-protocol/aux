@@ -1,14 +1,12 @@
-use chrono::{DateTime, Utc};
 use crate::{
     config,
     db,
     error::{Error, Result},
-    util
 };
 use stamp_core::{
     crypto::key::{SecretKey, SignKeypair, CryptoKeypair},
     dag::Transactions,
-    identity::{ExtendKeypair, AlphaKeypair, PolicyKeypair, PublishKeypair, RootKeypair, Key, IdentityID, Identity, ClaimSpec, PublishedIdentity},
+    identity::{ExtendKeypair, AlphaKeypair, PolicyKeypair, PublishKeypair, RootKeypair, Key, IdentityID, ClaimSpec, PublishedIdentity},
     private::{Private, MaybePrivate},
     util::{Timestamp, SerdeBinary},
 };
@@ -19,8 +17,8 @@ pub fn post_new_id(master_key: &SecretKey, transactions: Transactions, name: Opt
     // ask if they want name/email claims, then add three default subkeys (sign,
     // crypto, secret) to their keychain.
     let subkey_sign = SignKeypair::new_ed25519(&master_key)?;
-    let subkey_crypto = CryptoKeypair::new_curve25519xsalsa20poly1305(&master_key)?;
-    let subkey_secret = Private::seal(&master_key, &SecretKey::new_xsalsa20poly1305())?;
+    let subkey_crypto = CryptoKeypair::new_curve25519xchacha20poly1305(&master_key)?;
+    let subkey_secret = Private::seal(&master_key, &SecretKey::new_xchacha20poly1305()?)?;
     let identity = transactions.build_identity()?;
     let transactions = transactions
         .make_claim(&master_key, Timestamp::now(), ClaimSpec::Identity(identity.id().clone()))?;
@@ -93,7 +91,7 @@ pub fn create_vanity<F>(regex: Option<&str>, contains: Vec<&str>, prefix: Option
 
     let mut now;
     let mut transactions;
-    let tmp_master_key = SecretKey::new_xsalsa20poly1305();
+    let tmp_master_key = SecretKey::new_xchacha20poly1305()?;
     let policy_keypair = PolicyKeypair::new_ed25519(&tmp_master_key)?;
     let publish_keypair = PublishKeypair::new_ed25519(&tmp_master_key)?;
     let root_keypair = RootKeypair::new_ed25519(&tmp_master_key)?;
