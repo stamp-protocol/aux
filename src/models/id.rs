@@ -31,9 +31,9 @@ pub fn post_new_id(master_key: &SecretKey, transactions: Transactions, name: Opt
         None => transactions,
     };
     let transactions = transactions
-        .add_subkey(master_key, Timestamp::now(), Key::new_sign(subkey_sign), "default:sign", Some("A default key for signing documents or messages."))?
-        .add_subkey(master_key, Timestamp::now(), Key::new_crypto(subkey_crypto), "default:crypto", Some("A default key for receiving private messages."))?
-        .add_subkey(master_key, Timestamp::now(), Key::new_secret(subkey_secret), "default:secret", Some("A default key allowing encryption/decryption of personal data."))?;
+        .add_subkey(master_key, Timestamp::now(), Key::new_sign(subkey_sign), "default/sign", Some("A default key for signing documents or messages."))?
+        .add_subkey(master_key, Timestamp::now(), Key::new_crypto(subkey_crypto), "default/crypto", Some("A default key for receiving private messages."))?
+        .add_subkey(master_key, Timestamp::now(), Key::new_secret(subkey_secret), "default/secret", Some("A default key allowing encryption/decryption of personal data."))?;
     let transactions = db::save_identity(transactions)?;
     let mut conf = config::load()?;
     if conf.default_identity.is_none() {
