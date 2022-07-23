@@ -186,10 +186,15 @@ fn load_local_transactions(identity_id: &str, shared_key: &Option<SecretKey>, sy
 fn request_identity(identity_id: &str, shared_key: &Option<SecretKey>) -> Result<sync::IdentityRequest> {
     match &shared_key {
         Some(_) => {
-            let transactions = load_identity_by_prefix(identity_id)?;
-            let already_have = transactions.transactions().iter()
-                .map(|t| t.id().clone())
-                .collect::<Vec<_>>();
+            let already_have = match load_identity_by_prefix(identity_id) {
+                Ok(transactions) => {
+                    transactions.transactions().iter()
+                        .map(|t| t.id().clone())
+                        .collect::<Vec<_>>()
+                }
+                Err(Error::NotFound(..)) => Vec::new(),
+                Err(e) => Err(e)?,
+            };
             Ok(sync::IdentityRequest::new(already_have))
         }
         None => {
