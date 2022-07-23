@@ -11,8 +11,14 @@ use std::{
 };
 
 #[derive(Clone, Debug, Default, serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct NetConfig {
+    pub join_list: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct Config {
     pub default_identity: Option<String>,
+    pub net: Option<NetConfig>,
 }
 
 /// Load the local configuration.

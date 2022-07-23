@@ -4,6 +4,11 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
 
+pub fn setup_tracing() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    Ok(())
+}
+
 /// Get the current user's data directory.
 pub fn data_dir() -> Result<PathBuf> {
     let mut dir = dirs::data_dir()

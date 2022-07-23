@@ -4,10 +4,12 @@ use crate::{
 };
 use rusqlite::{params, Connection};
 use stamp_core::{
-    dag::Transactions,
+    dag::{TransactionID, Transactions},
     identity::IdentityID,
     util::SerdeBinary,
 };
+use stamp_net::sync::TransactionMessageSigned;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fs;
 
@@ -28,7 +30,11 @@ fn conn() -> Result<Connection> {
 /// Make sure our schema is applied
 pub fn ensure_schema() -> Result<()> {
     let conn = conn()?;
+    // holds local identities
     conn.execute("CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, nickname TEXT, created TEXT NOT NULL, data BLOB NOT NULL, name_lookup JSON, email_lookup JSON, claim_lookup JSON, stamp_lookup JSON)", params![])?;
+    // holds transactions for private syncing
+    conn.execute("CREATE TABLE IF NOT EXISTS sync_transactions (transaction_id TEXT PIMARY KEY, identity_id TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS sync_transactions_identity ON sync_transactions (identity_id)", params![])?;
     Ok(())
 }
 
@@ -202,5 +208,63 @@ pub fn delete_identity(id: &str) -> Result<()> {
     conn.execute("DELETE FROM identities WHERE id = ?1", params![id])?;
     conn.execute("COMMIT", params![])?;
     Ok(())
+}
+
+/// Save a transaction from a private sync record
+pub fn save_sync_transaction(id_str: &str, transaction: TransactionMessageSigned) -> Result<TransactionMessageSigned> {
+    let serialized = transaction.serialize()?;
+    let conn = conn()?;
+    let transaction_id = String::from(transaction.transaction().id());
+    conn.execute("BEGIN", params![])?;
+    conn.execute("DELETE FROM sync_transactions WHERE transaction_id = ?1", params![transaction_id])?;
+    conn.execute(
+        r#"
+            INSERT INTO sync_transactions
+            (transaction_id, identity_id, data)
+            VALUES (?1, ?2, ?3)
+        "#,
+        params![
+            &transaction_id,
+            id_str,
+            &serialized,
+        ]
+    )?;
+    conn.execute("COMMIT", params![])?;
+    Ok(transaction)
+}
+
+/// Find all sync transactions for an identity, excluding the passed list of trans ids.
+pub fn find_sync_transactions(id_str: &str, exclude: &Vec<TransactionID>) -> Result<Vec<TransactionMessageSigned>> {
+    let conn = conn()?;
+    // NOTE: we DO NOT filter out our excluded transaction IDs in the query because
+    // rusqlite gets butthurt when we do dynamic params. instead we just filter the
+    // results out by hand afterwards. dumb, but it works.
+    let qry = r#"
+        SELECT
+            st.transaction_id, st.data
+        FROM
+            sync_transactions st
+        WHERE
+            st.identity_id LIKE ?1
+    "#;
+    let mut stmt = conn.prepare(qry)?;
+    let rows = stmt.query_map(params![format!("{}%", id_str)], |row| -> rusqlite::Result<_> {
+        let tid: String = row.get(0)?;
+        let data: Vec<u8> = row.get(1)?;
+        Ok((tid, data))
+    })?;
+
+    let exclude_set = exclude.iter()
+        .map(|tid| String::from(tid))
+        .collect::<HashSet<_>>();
+    let mut transactions = Vec::new();
+    for row in rows {
+        let (tid, data) = row?;
+        if !exclude_set.contains(&tid) {
+            let message = TransactionMessageSigned::deserialize(data.as_slice())?;
+            transactions.push(message);
+        }
+    }
+    Ok(transactions)
 }
 

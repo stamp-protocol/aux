@@ -11,6 +11,14 @@ pub enum Error {
     #[error("bad home dir")]
     BadHomeDir,
 
+    /// Channel recv error
+    #[error("channel recv: {0}")]
+    ChannelRecv(#[from] async_std::channel::RecvError),
+
+    /// Channel send error
+    #[error("channel send: {0}")]
+    ChannelSend(String),
+
     /// A claim failed to verify
     #[error("claim check failed {0}")]
     ClaimCheckFail(String),
@@ -31,9 +39,33 @@ pub enum Error {
     #[error("date parsing/conversion error: {0}")]
     DateError(#[from] chrono::format::ParseError),
 
+    /// Failed to resolve a DNS address
+    #[error("dns lookup failure: {0}")]
+    DnsLookupFailure(String),
+
+    /// Expected exactly one identity, found multiple
+    #[error("expected exactly one identity with id {0} but found multiple")]
+    IdentityCollision(String),
+
+    /// Invalid protocol given, probably a bad [Multiaddr][stamp_net::Multiaddr]
+    #[error("invalid protocol given: {0}")]
+    InvalidProtocol(String),
+
     /// An IO error occured
     #[error("io error: {0}")]
     IoError(#[from] std::io::Error),
+
+    /// Failed to properly generate a key
+    #[error("key generation failed")]
+    KeygenFailed,
+
+    /// Failed ot set up logging
+    #[error("failed to set up logging")]
+    LoggingInit,
+
+    /// StampNet error
+    #[error("StampNet error: {0}")]
+    Net(#[from] stamp_net::Error),
 
     /// Something was lost
     #[error("not found {0}")]
@@ -58,6 +90,10 @@ pub enum Error {
     /// A value or file provided is too large
     #[error("file/value provided is too large: {0}")]
     TooBig(String),
+
+    /// Error setting up tracing lib
+    #[error("error setting up tracing")]
+    Tracing(String),
 }
 
 /// Wraps `std::result::Result` around our `Error` enum
