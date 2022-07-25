@@ -168,7 +168,11 @@ pub fn load_identity_by_prefix(identity_id: &str) -> Result<Transactions> {
 fn load_local_transactions(identity_id: &str, shared_key: &Option<SecretKey>, sync_signkey: &Option<SignKeypair>, exclude: &Vec<TransactionID>) -> Result<Vec<TransactionMessageSigned>> {
     match (&shared_key, &sync_signkey) {
         (Some(seckey), Some(signkey)) => {
-            let transactions = load_identity_by_prefix(identity_id)?;
+            let transactions = match load_identity_by_prefix(identity_id) {
+                Ok(trans) => trans,
+                Err(Error::NotFound(_)) => return Ok(Vec::new()),
+                Err(e) => Err(e)?,
+            };
             let exclude_set = exclude.iter().collect::<HashSet<_>>();
             transactions.transactions().iter()
                 .filter(|t| !exclude_set.contains(t.id()))
@@ -208,7 +212,7 @@ fn request_identity(identity_id: &str, shared_key: &Option<SecretKey>) -> Result
 }
 
 /// Save a transaction we got from someone else that we don't already have.
-#[tracing::instrument(skip(identity_id, shared_key))]
+#[tracing::instrument(skip(identity_id, shared_key, transaction_messages))]
 fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transaction_messages: Vec<TransactionMessageSigned>) -> Result<()> {
     match shared_key {
         Some(seckey) => {
@@ -230,6 +234,7 @@ fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transact
             }
             transactions.build_identity()?;
             db::save_identity(transactions)?;
+            info!("Saved {} transactions", save_len);
         }
         None => {
             for trans_raw in transaction_messages {
@@ -250,16 +255,18 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
             // decrypt the transaction and push it onto the stinkin
             // list. otherwise, save the raw (encrypted) transaction
             // into the sync store.
-            info!("Saving {} identity transactions", transactions.len());
-            match save_transactions(identity_id, shared_key, transactions) {
-                Err(e) => error!("Error saving identity transactions: {}", e),
-                _ => {}
+            if transactions.len() > 0 {
+                info!("Got {} identity transactions from peers, saving", transactions.len());
+                match save_transactions(identity_id, shared_key, transactions) {
+                    Err(e) => error!("Error saving identity transactions: {}", e),
+                    _ => {}
+                }
             }
         }
         sync::Event::MaybeRequestIdentity => {
             match request_identity(identity_id, shared_key) {
                 Ok(req) => {
-                    debug!("Requesting identity {} (have {} transactions)", identity_id, req.already_have().len());
+                    debug!("Requesting identity {} from peers (have {} transactions)", identity_id, req.already_have().len());
                     match sync_incoming_send.send(sync::Command::RequestIdentity(req)).await {
                         Err(e) => error!("Error sending identity request: {}", e),
                         _ => {}
@@ -271,13 +278,22 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
         sync::Event::RequestIdentity(req) => {
             match load_local_transactions(identity_id, shared_key, sync_signkey, req.already_have()) {
                 Ok(signed_messages) => {
-                    match sync_incoming_send.send(sync::Command::SendTransactions(signed_messages)).await {
-                        Err(e) => error!("Error sending transaction message: {}", e),
-                        _ => {}
+                    if signed_messages.len() > 0 {
+                        info!("Publishing {} identity transactions to peers", signed_messages.len());
+                        match sync_incoming_send.send(sync::Command::SendTransactions(signed_messages)).await {
+                            Err(e) => error!("Error sending transaction message: {}", e),
+                            _ => {}
+                        }
                     }
                 }
                 Err(e) => error!("Error loading transaction messages: {}", e),
             }
+        }
+        sync::Event::Subscribed { topic } => {
+            info!("Subscribed to topic {}", topic);
+        }
+        sync::Event::Unsubscribed { topic } => {
+            info!("Unsubscribed from topic {}", topic);
         }
         _ => {}
     }
