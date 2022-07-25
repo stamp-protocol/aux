@@ -209,21 +209,32 @@ fn request_identity(identity_id: &str, shared_key: &Option<SecretKey>) -> Result
 
 /// Save a transaction we got from someone else that we don't already have.
 #[tracing::instrument(skip(identity_id, shared_key))]
-fn save_transaction(identity_id: &str, shared_key: &Option<SecretKey>, msg: TransactionMessageSigned) -> Result<()> {
+fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transaction_messages: Vec<TransactionMessageSigned>) -> Result<()> {
     match shared_key {
         Some(seckey) => {
-            let mut transactions = load_identity_by_prefix(identity_id)?;
-            let exists = transactions.iter().find(|t| t.id() == msg.transaction().id());
-            if exists.is_some() {
-                return Ok(());
+            let mut transactions = match load_identity_by_prefix(identity_id) {
+                Ok(transactions) => transactions,
+                Err(Error::NotFound(..)) => Transactions::new(),
+                Err(e) => Err(e)?,
+            };
+            let trans_set = transactions.iter()
+                .map(|t| t.id().clone())
+                .collect::<HashSet<_>>();
+            let filtered = transaction_messages.into_iter()
+                .filter(|t| !trans_set.contains(t.transaction().id()))
+                .collect::<Vec<_>>();
+            let save_len = filtered.len();
+            for trans_raw in filtered {
+                let transaction_versioned = trans_raw.open(seckey)?;
+                transactions.push_transaction_raw(transaction_versioned)?;
             }
-            let transaction_versioned = msg.open(seckey)?;
-            transactions.push_transaction_raw(transaction_versioned)?;
             transactions.build_identity()?;
-            // TODO: decrypt and save into the identity
+            db::save_identity(transactions)?;
         }
         None => {
-            db::save_sync_transaction(identity_id, msg)?;
+            for trans_raw in transaction_messages {
+                db::save_sync_transaction(identity_id, trans_raw)?;
+            }
         }
     }
     Ok(())
@@ -234,15 +245,14 @@ fn save_transaction(identity_id: &str, shared_key: &Option<SecretKey>, msg: Tran
 async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &Option<SecretKey>, sync_signkey: &Option<SignKeypair>, sync_incoming_send: &channel::Sender<sync::Command>) -> Result<()> {
     debug!("event: {}", event);
     match event {
-        sync::Event::IdentityTransaction(msg) => {
+        sync::Event::IdentityTransactions(transactions) => {
             // if the transaction is valid and we have a shared key,
             // decrypt the transaction and push it onto the stinkin
             // list. otherwise, save the raw (encrypted) transaction
             // into the sync store.
-            let id = String::from(msg.transaction().id());
-            info!("Saving identity transaction: {}", id);
-            match save_transaction(identity_id, shared_key, msg) {
-                Err(e) => error!("Error saving identity transaction {}: {}", id, e),
+            info!("Saving {} identity transactions", transactions.len());
+            match save_transactions(identity_id, shared_key, transactions) {
+                Err(e) => error!("Error saving identity transactions: {}", e),
                 _ => {}
             }
         }
@@ -261,11 +271,9 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
         sync::Event::RequestIdentity(req) => {
             match load_local_transactions(identity_id, shared_key, sync_signkey, req.already_have()) {
                 Ok(signed_messages) => {
-                    for message in signed_messages {
-                        match sync_incoming_send.send(sync::Command::SendTransaction(message)).await {
-                            Err(e) => error!("Error sending transaction message: {}", e),
-                            _ => {}
-                        }
+                    match sync_incoming_send.send(sync::Command::SendTransactions(signed_messages)).await {
+                        Err(e) => error!("Error sending transaction message: {}", e),
+                        _ => {}
                     }
                 }
                 Err(e) => error!("Error loading transaction messages: {}", e),

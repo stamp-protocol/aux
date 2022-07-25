@@ -1,5 +1,6 @@
 use crate::error::{Result, Error};
 use dirs;
+use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
@@ -11,19 +12,19 @@ pub fn setup_tracing() -> Result<()> {
 
 /// Get the current user's data directory.
 pub fn data_dir() -> Result<PathBuf> {
-    let mut dir = dirs::data_dir()
+    let dir = env::var("STAMP_DIR_DATA").map(|x| PathBuf::from(x)).ok()
+        .or_else(|| dirs::data_dir().map(|mut x| { x.push("stamp"); x }))
         .or_else(|| dirs::home_dir().map(|mut x| { x.push(".stamp"); x }))
         .ok_or(Error::BadHomeDir)?;
-    dir.push("stamp");
     Ok(dir)
 }
 
 /// Get the current user's config dir
 pub fn config_dir() -> Result<PathBuf> {
-    let mut dir = dirs::config_dir()
+    let dir = env::var("STAMP_DIR_CONFIG").map(|x| PathBuf::from(x)).ok()
+        .or_else(|| dirs::config_dir().map(|mut x| { x.push("stamp"); x }))
         .or_else(|| dirs::home_dir().map(|mut x| { x.push(".stamp"); x }))
         .ok_or(Error::BadHomeDir)?;
-    dir.push("stamp");
     Ok(dir)
 }
 
