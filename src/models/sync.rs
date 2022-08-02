@@ -45,7 +45,7 @@ use tracing::{debug, error, info};
 ///
 /// Note that this function does NOT save the identity! It's up the to caller to
 /// save the identity after return.
-pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: Option<RevocationReason>) -> Result<(Transactions, Key, SignKeypairPublic)> {
+pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: Option<RevocationReason>) -> Result<(Transactions, SecretKey, SignKeypairPublic)> {
     let identity = transactions.build_identity()?;
 
     let is_regen = do_regen.is_some();
@@ -89,7 +89,7 @@ pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: O
         .open(master_key)?;
     let sign_keypair = SignKeypair::new_ed25519_from_secret_key(&seckey, &seckey)?;
     let pubkey = SignKeypairPublic::from(sign_keypair);
-    Ok((transactions, key, pubkey))
+    Ok((transactions, seckey, pubkey))
 }
 
 /// Do two main things:
