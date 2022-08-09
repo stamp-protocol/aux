@@ -36,7 +36,23 @@ use stamp_net::{
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::time::Duration;
 use tracing::{debug, error, info};
+
+/// Turns a secret key into a signing keypair.
+pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
+    Ok(SignKeypair::new_ed25519_from_secret_key(&seckey, &seckey)?)
+}
+
+/// Turns a secret key into a sync channel (the channel is actually a base64
+/// representation of a public key).
+pub fn shared_key_to_channel(seckey: &SecretKey) -> Result<String> {
+    let sign_keypair = shared_key_to_sign_key(seckey)?;
+    let pubkey = SignKeypairPublic::from(sign_keypair.clone());
+    let pubkey_ser = pubkey.serialize()?;
+    let channel = stamp_core::util::base64_encode(&pubkey_ser);
+    Ok(channel)
+}
 
 /// Returns a private syncing key ([SecretKey][stamp_core::crypto::key::SecretKey])
 /// and private syncing token token (an HMAC of our secret key and identity id). If
@@ -45,7 +61,7 @@ use tracing::{debug, error, info};
 ///
 /// Note that this function does NOT save the identity! It's up the to caller to
 /// save the identity after return.
-pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: Option<RevocationReason>) -> Result<(Transactions, SecretKey, SignKeypairPublic)> {
+pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: Option<RevocationReason>) -> Result<(Transactions, SecretKey)> {
     let identity = transactions.build_identity()?;
 
     let is_regen = do_regen.is_some();
@@ -87,9 +103,7 @@ pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: O
     let seckey = key.as_secretkey()
         .ok_or(Error::KeygenFailed)?
         .open(master_key)?;
-    let sign_keypair = SignKeypair::new_ed25519_from_secret_key(&seckey, &seckey)?;
-    let pubkey = SignKeypairPublic::from(sign_keypair);
-    Ok((transactions, seckey, pubkey))
+    Ok((transactions, seckey))
 }
 
 /// Do two main things:
@@ -213,7 +227,7 @@ fn request_identity(identity_id: &str, shared_key: &Option<SecretKey>) -> Result
 
 /// Save a transaction we got from someone else that we don't already have.
 #[tracing::instrument(skip(identity_id, shared_key, transaction_messages))]
-fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transaction_messages: Vec<TransactionMessageSigned>) -> Result<()> {
+fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transaction_messages: Vec<TransactionMessageSigned>) -> Result<usize> {
     match shared_key {
         Some(seckey) => {
             let mut transactions = match load_identity_by_prefix(identity_id) {
@@ -235,20 +249,48 @@ fn save_transactions(identity_id: &str, shared_key: &Option<SecretKey>, transact
             transactions.build_identity()?;
             db::save_identity(transactions)?;
             info!("Saved {} transactions", save_len);
+            Ok(save_len)
         }
         None => {
+            let len = transaction_messages.len();
             for trans_raw in transaction_messages {
                 db::save_sync_transaction(identity_id, trans_raw)?;
             }
+            Ok(len)
         }
     }
-    Ok(())
+}
+
+enum ProcessResult {
+    Other,
+    RequestedIdentity,
+    SavedTransactions(usize),
+    SentTransactions(usize),
+    Subscribed,
+    Unsubscribed,
 }
 
 /// Process a sync event.
 #[tracing::instrument(skip(event, identity_id, shared_key, sync_signkey, sync_incoming_send))]
-async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &Option<SecretKey>, sync_signkey: &Option<SignKeypair>, sync_incoming_send: &channel::Sender<sync::Command>) -> Result<()> {
-    debug!("event: {}", event);
+async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &Option<SecretKey>, sync_signkey: &Option<SignKeypair>, sync_incoming_send: &channel::Sender<sync::Command>) -> Result<ProcessResult> {
+    debug!("event: listen: {}", event);
+    let mut res = ProcessResult::Other;
+    macro_rules! do_request_identity {
+        () => {
+            match request_identity(identity_id, shared_key) {
+                Ok(req) => {
+                    debug!("Requesting identity {} from peers (have {} transactions)", identity_id, req.already_have().len());
+                    match sync_incoming_send.send(sync::Command::RequestIdentity(req)).await {
+                        Err(e) => error!("Error sending identity request: {}", e),
+                        _ => {
+                            res = ProcessResult::RequestedIdentity;
+                        }
+                    }
+                }
+                Err(e) => error!("Error grabbing identity transactions for request: {}", e),
+            }
+        }
+    }
     match event {
         sync::Event::IdentityTransactions(transactions) => {
             // if the transaction is valid and we have a shared key,
@@ -258,31 +300,29 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
             if transactions.len() > 0 {
                 info!("Got {} identity transactions from peers, saving", transactions.len());
                 match save_transactions(identity_id, shared_key, transactions) {
+                    Ok(len) => {
+                        if len > 0 {
+                            res = ProcessResult::SavedTransactions(len);
+                        }
+                    }
                     Err(e) => error!("Error saving identity transactions: {}", e),
-                    _ => {}
                 }
             }
         }
         sync::Event::MaybeRequestIdentity => {
-            match request_identity(identity_id, shared_key) {
-                Ok(req) => {
-                    debug!("Requesting identity {} from peers (have {} transactions)", identity_id, req.already_have().len());
-                    match sync_incoming_send.send(sync::Command::RequestIdentity(req)).await {
-                        Err(e) => error!("Error sending identity request: {}", e),
-                        _ => {}
-                    }
-                }
-                Err(e) => error!("Error grabbing identity transactions for request: {}", e),
-            }
+            do_request_identity!()
         }
         sync::Event::RequestIdentity(req) => {
             match load_local_transactions(identity_id, shared_key, sync_signkey, req.already_have()) {
                 Ok(signed_messages) => {
                     if signed_messages.len() > 0 {
-                        info!("Publishing {} identity transactions to peers", signed_messages.len());
+                        let msg_len = signed_messages.len();
+                        info!("Publishing {} identity transactions to peers", msg_len);
                         match sync_incoming_send.send(sync::Command::SendTransactions(signed_messages)).await {
                             Err(e) => error!("Error sending transaction message: {}", e),
-                            _ => {}
+                            _ => {
+                                res = ProcessResult::SentTransactions(msg_len);
+                            }
                         }
                     }
                 }
@@ -291,13 +331,16 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
         }
         sync::Event::Subscribed { topic } => {
             info!("Subscribed to topic {}", topic);
+            res = ProcessResult::Subscribed;
+            do_request_identity!()
         }
         sync::Event::Unsubscribed { topic } => {
+            res = ProcessResult::Unsubscribed;
             info!("Unsubscribed from topic {}", topic);
         }
         _ => {}
     }
-    Ok(())
+    Ok(res)
 }
 
 /// Create a long-lived sync listener.
@@ -317,7 +360,7 @@ pub fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, bind: 
     let key_bytes = stamp_core::util::base64_decode(channel)?;
     let sync_pubkey = SignKeypairPublic::deserialize(&key_bytes)?;
     let sync_signkey = shared_key.as_ref()
-        .map(|seckey| SignKeypair::new_ed25519_from_secret_key(&seckey, &seckey))
+        .map(|seckey| shared_key_to_sign_key(seckey))
         .transpose()?;
 
     let resolved = process_joinlist(join)?;
@@ -364,6 +407,98 @@ pub fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, bind: 
         syncer.await?;
         events.await?;
         Ok(())
+    })
+}
+
+/// Create a long-lived sync listener.
+///
+/// This will join the larger StampNet network if given a set of nodes to join
+/// and will help other nodes' discovery via DHT.
+#[tracing::instrument(skip(id_str, channel, shared_key, join))]
+pub fn run(id_str: &str, channel: &str, shared_key: SecretKey, join: Vec<Multiaddr>) -> Result<(usize, usize)> {
+    // our channel is also a base64-serialized public key that can be used to
+    // verify transaction parts signed by full nodes.
+    let key_bytes = stamp_core::util::base64_decode(channel)?;
+    let sync_pubkey = SignKeypairPublic::deserialize(&key_bytes)?;
+    let sync_signkey = Some(shared_key_to_sign_key(&shared_key)?);
+    let shared_key_wrap = Some(shared_key);
+
+    let resolved = process_joinlist(join)?;
+    let local_key = stamp_net::random_peer_key();
+
+    info!("Running sync -- id: {} / channel: {}", id_str, channel);
+    let mut swarm = stamp_net::setup(local_key, false)?;
+    for address in &resolved {
+        match swarm.dial(address.clone()) {
+            Ok(_) => info!("Dialed {:?}", address),
+            Err(e) => error!("Dial {:?} failed: {:?}", address, e),
+        };
+    }
+    let (core_incoming_send, core_incoming_recv) = channel::bounded::<core::Command>(16);
+    let (core_outgoing_send, core_outgoing_recv) = channel::bounded::<core::Event>(16);
+    let (sync_incoming_send, sync_incoming_recv) = channel::bounded::<sync::Command>(16);
+    let (sync_outgoing_send, sync_outgoing_recv) = channel::bounded::<sync::Event>(16);
+    let channel = String::from(channel);
+    let identity_id = String::from(id_str);
+    async_std::task::block_on(async move {
+        let runner = task::spawn(async move {
+            stamp_net::core::run(swarm, core_incoming_recv, core_outgoing_send).await
+        });
+        // this MITMs the core events and spits out sync events (and takes sync commands)
+        let syncer = task::spawn(async move {
+            stamp_net::sync::run(&channel, &sync_pubkey, core_incoming_send, core_outgoing_recv, sync_incoming_recv, sync_outgoing_send).await
+        });
+        let events = task::spawn(async move {
+            // create/run a timer that quits after Ns of inactivity
+            const IDLE_TIMEOUT_SECS: u64 = 5;
+            let mut timer: Option<task::JoinHandle<()>> = None;
+            async fn reset_timer(secs: u64, timer: Option<task::JoinHandle<()>>, sync_incoming_send: &channel::Sender<sync::Command>) -> Option<task::JoinHandle<()>> {
+                if let Some(task) = timer {
+                    task.cancel().await;
+                }
+                let sync_incoming_send2 = sync_incoming_send.clone();
+                Some(task::spawn(async move {
+                    task::sleep(Duration::from_secs(secs)).await;
+                    info!("Finished syncing, sending quit signal");
+                    match sync_incoming_send2.send(sync::Command::Quit).await {
+                        Err(e) => error!("Error ending main run loop: {}", e),
+                        _ => {}
+                    }
+                }))
+            }
+            let mut init = false;
+            let mut sent = 0;
+            let mut recv = 0;
+            timer = reset_timer(30, timer, &sync_incoming_send).await;
+            loop {
+                let event = sync_outgoing_recv.recv().await?;
+                if matches!(event, sync::Event::Quit) {
+                    break;
+                }
+                match process_sync_event(event, identity_id.as_str(), &shared_key_wrap, &sync_signkey, &sync_incoming_send).await {
+                    Ok(ProcessResult::SavedTransactions(len)) => {
+                        timer = reset_timer(IDLE_TIMEOUT_SECS, timer, &sync_incoming_send).await;
+                        recv += len;
+                    }
+                    Ok(ProcessResult::SentTransactions(len)) => {
+                        timer = reset_timer(IDLE_TIMEOUT_SECS, timer, &sync_incoming_send).await;
+                        sent += len;
+                    }
+                    Ok(ProcessResult::RequestedIdentity) | Ok(ProcessResult::Subscribed) => {
+                        if !init {
+                            timer = reset_timer(15, timer, &sync_incoming_send).await;
+                            init = true;
+                        }
+                    }
+                    Err(e) => error!("Problem processing incoming event: {}", e),
+                    _ => {}
+                }
+            }
+            Ok((sent, recv))
+        });
+        runner.await?;
+        syncer.await?;
+        events.await
     })
 }
 
