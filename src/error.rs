@@ -7,6 +7,10 @@ use thiserror::Error;
 /// which an expectation is not met or a problem occurs.
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Couldn't find an admin key that allows the transaction to verify
+    #[error("could not find admin key that satisfies a policy for the transaction")]
+    AdminKeyNotFound,
+
     /// Couldn't find the home dir. Sad!
     #[error("bad home dir")]
     BadHomeDir,
@@ -38,6 +42,10 @@ pub enum Error {
     /// Error parsing/converting a date
     #[error("date parsing/conversion error: {0}")]
     DateError(#[from] chrono::format::ParseError),
+
+    /// Failed to deserialize a value
+    #[error("failed to deserialize a value")]
+    DeserializeFailure,
 
     /// Failed to resolve a DNS address
     #[error("dns lookup failure: {0}")]

@@ -47,13 +47,13 @@ fn json_arr(vec: &Vec<String>) -> String {
 pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
     let identity = transactions.build_identity()?;
     let id_str = id_str!(identity.id())?;
-    let nickname = identity.nickname_maybe();
+    let nickname = identity.nickname();
     let created = format!("{}", identity.created().format("%+"));
 
     let name_lookup = identity.names();
     let email_lookup = identity.emails();
     let claim_lookup = identity.claims().iter()
-        .map(|x| id_str!(x.claim().id()))
+        .map(|x| id_str!(x.id()))
         .collect::<Result<Vec<String>>>()?;
     let stamp_lookup = identity.claims().iter()
         .map(|x| {

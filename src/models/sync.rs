@@ -20,12 +20,12 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::key::{SecretKey, SignKeypair, SignKeypairPublic},
-    dag::{TransactionID, Transactions},
+    crypto::base::{Hash, SecretKey, SignKeypair, SignKeypairPublic},
+    dag::{Transaction, TransactionID, Transactions},
     identity::{
         keychain::{Key, RevocationReason},
     },
-    private::Private,
+    private::PrivateWithMac,
     util::{Timestamp},
 };
 use stamp_net::{
@@ -41,7 +41,9 @@ use tracing::{debug, error, info};
 
 /// Turns a secret key into a signing keypair.
 pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
-    Ok(SignKeypair::new_ed25519_from_secret_key(&seckey, &seckey)?)
+    let hash = Hash::new_blake2b(seckey.as_ref())?;
+    let seed: [u8; 32] = hash.as_bytes().try_into().map_err(|_| Error::ConversionError)?;
+    Ok(SignKeypair::new_ed25519_from_seed(&seckey, &seed)?)
 }
 
 /// Turns a secret key into a sync channel (the channel is actually a base64
@@ -61,40 +63,39 @@ pub fn shared_key_to_channel(seckey: &SecretKey) -> Result<String> {
 ///
 /// Note that this function does NOT save the identity! It's up the to caller to
 /// save the identity after return.
-pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: Option<RevocationReason>) -> Result<(Transactions, SecretKey)> {
+pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, do_regen: Option<RevocationReason>) -> Result<(Vec<Transaction>, SecretKey)> {
     let identity = transactions.build_identity()?;
 
     let is_regen = do_regen.is_some();
-    let regen = |transactions: Transactions| -> Result<(Transactions, Key)> {
-        let sync_key_maybe = identity.keychain()
-            .subkey_by_name("stamp/sync");
+    let regen = |transactions: &Transactions| -> Result<(Vec<Transaction>, Key)> {
+        let sync_key_maybe = identity.keychain().subkey_by_name("stamp/sync");
         let now = Timestamp::now();
         let secretkey = SecretKey::new_xchacha20poly1305()?;
-        let key = Key::new_secret(Private::seal(master_key, &secretkey)?);
-        let new_key = |transactions: Transactions| -> stamp_core::error::Result<Transactions> {
+        let key = Key::new_secret(PrivateWithMac::seal(master_key, secretkey)?);
+        let new_key = |transactions: &Transactions| -> stamp_core::error::Result<Transaction> {
             transactions
-                .add_subkey(master_key, now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))
+                .add_subkey(now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))
         };
-        let transactions = if sync_key_maybe.is_some() {
+        let staged = if let Some(exists) = sync_key_maybe {
             // revoke it if it exists, then add it again
-            new_key(
-                transactions
-                    .revoke_subkey(master_key, now.clone(), "stamp/sync", do_regen.unwrap_or(RevocationReason::Superseded), Some(&format!("revoked/stamp/sync/{}", now.timestamp())))?
-            )?
+            let trans_revoke = transactions
+                .revoke_subkey(now.clone(), exists.key_id(), do_regen.unwrap_or(RevocationReason::Superseded), Some(&format!("revoked/stamp/sync/{}", now.timestamp())))?;
+            let trans_subkey = new_key(transactions)?;
+            vec![trans_revoke, trans_subkey]
         } else {
-            new_key(transactions)?
+            vec![new_key(transactions)?]
         };
-        Ok((transactions, key))
+        Ok((staged, key))
     };
 
-    let (transactions, key) = if is_regen {
+    let (staged, key) = if is_regen {
         regen(transactions)?
     } else {
         let sync_key_maybe = identity.keychain()
             .subkey_by_name("stamp/sync")
             .map(|s| s.key().clone());
         if let Some(sync_key) = sync_key_maybe {
-            (transactions, sync_key)
+            (vec![], sync_key)
         } else {
             regen(transactions)?
         }
@@ -102,8 +103,8 @@ pub fn gen_token(master_key: &SecretKey, transactions: Transactions, do_regen: O
 
     let seckey = key.as_secretkey()
         .ok_or(Error::KeygenFailed)?
-        .open(master_key)?;
-    Ok((transactions, seckey))
+        .open_and_verify(master_key)?;
+    Ok((staged, seckey))
 }
 
 /// Do two main things:
