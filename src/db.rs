@@ -31,7 +31,7 @@ fn conn() -> Result<Connection> {
 pub fn ensure_schema() -> Result<()> {
     let conn = conn()?;
     // holds local identities
-    conn.execute("CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, nickname TEXT, created TEXT NOT NULL, data BLOB NOT NULL, name_lookup JSON, email_lookup JSON, claim_lookup JSON, stamp_lookup JSON)", params![])?;
+    conn.execute("CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, created TEXT NOT NULL, data BLOB NOT NULL, name_lookup JSON, email_lookup JSON, claim_lookup JSON, stamp_lookup JSON)", params![])?;
     // holds transactions for private syncing
     conn.execute("CREATE TABLE IF NOT EXISTS sync_transactions (transaction_id TEXT PIMARY KEY, identity_id TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
     conn.execute("CREATE INDEX IF NOT EXISTS sync_transactions_identity ON sync_transactions (identity_id)", params![])?;
@@ -47,7 +47,6 @@ fn json_arr(vec: &Vec<String>) -> String {
 pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
     let identity = transactions.build_identity()?;
     let id_str = id_str!(identity.id())?;
-    let nickname = identity.nickname();
     let created = format!("{}", identity.created().format("%+"));
 
     let name_lookup = identity.names();
@@ -69,12 +68,11 @@ pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
     conn.execute(
         r#"
             INSERT INTO identities
-            (id, nickname, created, data, name_lookup, email_lookup, claim_lookup, stamp_lookup)
-            VALUES (?1, ?2, ?3, ?4, json(?5), json(?6), json(?7), json(?8))
+            (id, created, data, name_lookup, email_lookup, claim_lookup, stamp_lookup)
+            VALUES (?1, ?2, ?3, json(?4), json(?5), json(?6), json(?7))
         "#,
         params![
             id_str,
-            nickname,
             created,
             serialized,
             json_arr(&name_lookup),
