@@ -212,7 +212,7 @@ pub fn delete_identity(id: &str) -> Result<()> {
 pub fn save_sync_transaction(id_str: &str, transaction: TransactionMessageSigned) -> Result<TransactionMessageSigned> {
     let serialized = transaction.serialize()?;
     let conn = conn()?;
-    let transaction_id = String::from(transaction.transaction().id());
+    let transaction_id = String::try_from(transaction.transaction().id())?;
     conn.execute("BEGIN", params![])?;
     conn.execute("DELETE FROM sync_transactions WHERE transaction_id = ?1", params![transaction_id])?;
     conn.execute(
@@ -253,7 +253,7 @@ pub fn find_sync_transactions(id_str: &str, exclude: &Vec<TransactionID>) -> Res
     })?;
 
     let exclude_set = exclude.iter()
-        .map(|tid| String::from(tid))
+        .map(|tid| String::try_from(tid).unwrap_or_else(|_| String::from("")))
         .collect::<HashSet<_>>();
     let mut transactions = Vec::new();
     for row in rows {
