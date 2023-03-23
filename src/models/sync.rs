@@ -23,7 +23,7 @@ use stamp_core::{
     crypto::base::{Hash, SecretKey, SignKeypair, SignKeypairPublic},
     dag::{Transaction, TransactionID, Transactions},
     identity::{
-        keychain::{Key, RevocationReason},
+        keychain::{Key},
     },
     private::PrivateWithMac,
     util::{Timestamp},
@@ -37,12 +37,12 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Turns a secret key into a signing keypair.
 pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
     let hash = Hash::new_blake2b(seckey.as_ref())?;
-    let seed: [u8; 32] = hash.as_bytes().try_into().map_err(|_| Error::ConversionError)?;
+    let seed: [u8; 32] = hash.as_bytes()[0..32].try_into().map_err(|_| Error::ConversionError)?;
     Ok(SignKeypair::new_ed25519_from_seed(&seckey, &seed)?)
 }
 
@@ -57,48 +57,25 @@ pub fn shared_key_to_channel(seckey: &SecretKey) -> Result<String> {
 }
 
 /// Returns a private syncing key ([SecretKey][stamp_core::crypto::key::SecretKey])
-/// and private syncing token token (an HMAC of our secret key and identity id). If
+/// and private syncing token (a MAC of our secret key and identity id). If
 /// this key doesn't exist, we generate it and save it into the identity then use it
 /// to generate the token.
-///
-/// Note that this function does NOT save the identity! It's up the to caller to
-/// save the identity after return.
-pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, do_regen: Option<RevocationReason>) -> Result<(Vec<Transaction>, SecretKey)> {
+pub fn gen_token(master_key: &SecretKey, transactions: &Transactions) -> Result<(Option<Transaction>, SecretKey)> {
     let identity = transactions.build_identity()?;
 
-    let is_regen = do_regen.is_some();
-    let regen = |transactions: &Transactions| -> Result<(Vec<Transaction>, Key)> {
-        let sync_key_maybe = identity.keychain().subkey_by_name("stamp/sync");
+    let sync_key_maybe = identity.keychain()
+        .subkey_by_name("stamp/sync")
+        .filter(|k| k.revocation().is_none())
+        .map(|s| s.key().clone());
+    let (staged, key) = if let Some(sync_key) = sync_key_maybe {
+        (None, sync_key)
+    } else {
         let now = Timestamp::now();
         let secretkey = SecretKey::new_xchacha20poly1305()?;
         let key = Key::new_secret(PrivateWithMac::seal(master_key, secretkey)?);
-        let new_key = |transactions: &Transactions| -> stamp_core::error::Result<Transaction> {
-            transactions
-                .add_subkey(now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))
-        };
-        let staged = if let Some(exists) = sync_key_maybe {
-            // revoke it if it exists, then add it again
-            let trans_revoke = transactions
-                .revoke_subkey(now.clone(), exists.key_id(), do_regen.unwrap_or(RevocationReason::Superseded), Some(&format!("revoked/stamp/sync/{}", now.timestamp())))?;
-            let trans_subkey = new_key(transactions)?;
-            vec![trans_revoke, trans_subkey]
-        } else {
-            vec![new_key(transactions)?]
-        };
-        Ok((staged, key))
-    };
-
-    let (staged, key) = if is_regen {
-        regen(transactions)?
-    } else {
-        let sync_key_maybe = identity.keychain()
-            .subkey_by_name("stamp/sync")
-            .map(|s| s.key().clone());
-        if let Some(sync_key) = sync_key_maybe {
-            (vec![], sync_key)
-        } else {
-            regen(transactions)?
-        }
+        let transaction = transactions
+            .add_subkey(now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))?;
+        (Some(transaction), key)
     };
 
     let seckey = key.as_secretkey()
