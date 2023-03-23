@@ -1,10 +1,10 @@
 use crate::{
-    error::{Result},
+    error::{Error, Result},
     util,
 };
 use rusqlite::{params, Connection};
 use stamp_core::{
-    dag::{TransactionID, Transactions},
+    dag::{Transaction, TransactionID, Transactions},
     identity::IdentityID,
     util::SerdeBinary,
 };
@@ -32,6 +32,9 @@ pub fn ensure_schema() -> Result<()> {
     let conn = conn()?;
     // holds local identities
     conn.execute("CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, created TEXT NOT NULL, data BLOB NOT NULL, name_lookup JSON, email_lookup JSON, claim_lookup JSON, stamp_lookup JSON)", params![])?;
+    // holds transactions that require multiple signatures
+    conn.execute("CREATE TABLE IF NOT EXISTS staged_transactions (id TEXT PRIMARY KEY, identity_id TEXT NOT NULL, created TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS staged_transactions_identity ON staged_transactions (identity_id)", params![])?;
     // holds transactions for private syncing
     conn.execute("CREATE TABLE IF NOT EXISTS sync_transactions (transaction_id TEXT PIMARY KEY, identity_id TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
     conn.execute("CREATE INDEX IF NOT EXISTS sync_transactions_identity ON sync_transactions (identity_id)", params![])?;
@@ -68,8 +71,9 @@ pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
     conn.execute(
         r#"
             INSERT INTO identities
-            (id, created, data, name_lookup, email_lookup, claim_lookup, stamp_lookup)
-            VALUES (?1, ?2, ?3, json(?4), json(?5), json(?6), json(?7))
+                (id, created, data, name_lookup, email_lookup, claim_lookup, stamp_lookup)
+            VALUES
+                (?1, ?2, ?3, json(?4), json(?5), json(?6), json(?7))
         "#,
         params![
             id_str,
@@ -202,9 +206,87 @@ pub fn find_identity_by_prefix(ty: &str, id_prefix: &str) -> Result<Option<Trans
 /// Delete a local identity by id.
 pub fn delete_identity(id: &str) -> Result<()> {
     let conn = conn()?;
-    conn.execute("BEGIN", params![])?;
     conn.execute("DELETE FROM identities WHERE id = ?1", params![id])?;
-    conn.execute("COMMIT", params![])?;
+    Ok(())
+}
+
+/// Stages a transaction: saves it in its current state without applying it to
+/// the identity. Generally you do this if the transaction needs multiple
+/// signatures before it can be applied.
+pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> Result<Transaction> {
+    let id_str = id_str!(identity_id)?;
+    let transaction_id = String::try_from(transaction.id())
+        .map_err(|_| Error::ConversionError)?;
+    let serialized = transaction.serialize_binary()?;
+    let created = format!("{}", transaction.entry().created().format("%+"));
+    let conn = conn()?;
+    conn.execute(
+        r#"
+            INSERT INTO staged_transactions
+                (id, identity_id, created, data)
+            VALUES
+                (?1, ?2, ?3, ?4)
+            ON CONFLICT(id) DO
+            UPDATE SET
+                data = ?4
+        "#,
+        params![transaction_id, id_str, created, serialized]
+    )?;
+    Ok(transaction)
+}
+
+/// Load a staged transaction by its id.
+pub fn load_staged_transaction(transaction_id: &TransactionID) -> Result<Option<(IdentityID, Transaction)>> {
+    let transaction_id_str = String::try_from(transaction_id)
+        .map_err(|_| Error::ConversionError)?;
+    let conn = conn()?;
+    let res = conn.query_row(
+        r#"SELECT identity_id, data FROM staged_transactions WHERE id = ?1"#,
+        params![transaction_id_str],
+        |row| row.get(0).and_then(|id| row.get(1).and_then(|blob| Ok((id, blob))))
+    );
+    let found: Option<(String, Vec<u8>)> = match res {
+        Ok((id_str, blob)) => Some((id_str, blob)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => Err(e)?,
+    };
+    match found {
+        Some((id_str, data)) => {
+            let identity_id = IdentityID::try_from(id_str.as_str())
+                .map_err(|_| Error::ConversionError)?;
+            let transaction = Transaction::deserialize_binary(data.as_slice())?;
+            Ok(Some((identity_id, transaction)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Find staged transactions by identity id
+pub fn find_staged_transactions(identity_id: &IdentityID) -> Result<Vec<Transaction>> {
+    let id_str = id_str!(identity_id)?;
+    let conn = conn()?;
+    let mut stmt = conn.prepare(r#"
+        SELECT data FROM staged_transactions WHERE identity_id = ?1
+    "#)?;
+    let rows = stmt.query_map(
+        params![id_str],
+        |row: &rusqlite::Row<'_>| -> rusqlite::Result<_> { row.get(0) }
+    )?;
+    let mut transactions = Vec::new();
+    for data in rows {
+        let data_bin: Vec<u8> = data?;
+        let deserialized = Transaction::deserialize_binary(&data_bin)?;
+        transactions.push(deserialized);
+    }
+    Ok(transactions)
+}
+
+/// Delete a staged transaction.
+pub fn delete_staged_transaction(transaction_id: &TransactionID) -> Result<()> {
+    let transaction_id_str = String::try_from(transaction_id)
+        .map_err(|_| Error::ConversionError)?;
+    let conn = conn()?;
+    conn.execute(r#"DELETE FROM staged_transactions WHERE id = ?1"#, params![transaction_id_str])?;
     Ok(())
 }
 
