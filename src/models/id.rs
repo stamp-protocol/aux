@@ -15,9 +15,8 @@ use std::convert::TryFrom;
 
 /// Given an identity, master key, and transaction, find the admin key in the identity
 /// most optimal for signing this particular transaction.
-///
-/// The current strategy is to just use the first key that has permissions.
 pub fn sign_with_optimal_key(identity: &Identity, master_key: &SecretKey, transaction: Transaction) -> Result<Transaction> {
+    // The current strategy is to just use the first key that has permissions.
     for admin in identity.keychain().admin_keys() {
         let signed = transaction.clone().sign(master_key, admin)?;
         if signed.verify(Some(identity)).is_ok() {
@@ -82,7 +81,7 @@ pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, 
 
 /// Create a new random personal identity.
 pub fn create_personal_random(master_key: &SecretKey, now: Timestamp) -> Result<Transactions> {
-    let admin = AdminKey::new(AdminKeypair::new_ed25519(&master_key)?, "Alpha", Some("Your main admin key"));
+    let admin = AdminKey::new(AdminKeypair::new_ed25519(&master_key)?, "alpha", Some("Your main admin key"));
     let policy = Policy::new(
         vec![Capability::Permissive],
         MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
@@ -135,7 +134,7 @@ pub fn create_personal_vanity<F>(regex: Option<&str>, contains: Vec<&str>, prefi
     let empty = Transactions::new();
     loop {
         now = Timestamp::now();
-        let admin = AdminKey::new(AdminKeypair::new_ed25519(&tmp_master_key)?, "Alpha", Some("Your main admin key"));
+        let admin = AdminKey::new(AdminKeypair::new_ed25519(&tmp_master_key)?, "alpha", Some("Your main admin key"));
         let policy = Policy::new(
             vec![Capability::Permissive],
             MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
