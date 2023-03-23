@@ -32,7 +32,7 @@ use std::str::FromStr;
 /// How many bytes a photo can be
 pub const MAX_PHOTO_BYTES: usize = 8192;
 
-fn claim_post(transactions: Transactions, spec: ClaimSpec, name: Option<&str>) -> Result<Transaction> {
+fn claim_post(transactions: &Transactions, spec: ClaimSpec, name: Option<&str>) -> Result<Transaction> {
     Ok(transactions.make_claim(Timestamp::now(), spec, name)?)
 }
 
@@ -47,33 +47,33 @@ fn maybe_private<T>(master_key: &SecretKey, private: bool, value: T) -> Result<M
     Ok(maybe)
 }
 
-pub fn new_id(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_id(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let id = IdentityID::try_from(value.as_str())?;
     let maybe = maybe_private(&master_key, private, id)?;
     let spec = ClaimSpec::Identity(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_name(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_name(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Name(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_birthday(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_birthday(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let dob = Date::from_str(&value)?;
     let maybe = maybe_private(&master_key, private, dob)?;
     let spec = ClaimSpec::Birthday(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_email(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_email(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Email(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_photo(master_key: &SecretKey, transactions: Transactions, photo_bytes: Vec<u8>, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_photo(master_key: &SecretKey, transactions: &Transactions, photo_bytes: Vec<u8>, private: bool, name: Option<&str>) -> Result<Transaction> {
     if photo_bytes.len() > MAX_PHOTO_BYTES {
         Err(Error::TooBig(format!("Please choose a photo smaller than {} bytes (given photo is {} bytes)", MAX_PHOTO_BYTES, photo_bytes.len())))?;
     }
@@ -82,37 +82,53 @@ pub fn new_photo(master_key: &SecretKey, transactions: Transactions, photo_bytes
     claim_post(transactions, spec, name)
 }
 
-pub fn new_pgp(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_pgp(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Pgp(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_domain(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_domain(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value.clone())?;
     let spec = ClaimSpec::Domain(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_url(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_url(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let url = Url::parse(&value)?;
     let maybe = maybe_private(&master_key, private, url)?;
     let spec = ClaimSpec::Url(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_address(master_key: &SecretKey, transactions: Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_address(master_key: &SecretKey, transactions: &Transactions, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Address(maybe);
     claim_post(transactions, spec, name)
 }
 
-pub fn new_relation(master_key: &SecretKey, transactions: Transactions, reltype: RelationshipType, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_relation(master_key: &SecretKey, transactions: &Transactions, reltype: RelationshipType, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let rel_id = IdentityID::try_from(value.as_str())?;
     let relationship = Relationship::new(reltype, rel_id);
     let maybe = maybe_private(&master_key, private, relationship)?;
     let spec = ClaimSpec::Relation(maybe);
     claim_post(transactions, spec, name)
+}
+
+/// Rename a claim.
+pub fn rename(transactions: &Transactions, claim_id: &str, name: Option<&str>) -> Result<Transaction> {
+    let identity = transactions.build_identity()?;
+    let id_str = id_str!(identity.id())?;
+    let mut found: Option<Claim> = None;
+    for claim in identity.claims() {
+        let id_str = id_str!(claim.id())?;
+        if id_str.starts_with(claim_id) {
+            found = Some(claim.clone());
+            break;
+        }
+    }
+    let claim = found.ok_or(Error::NotFound(format!("Cannot find the claim {} in identity {}", claim_id, id_str)))?;
+    Ok(transactions.edit_claim(Timestamp::now(), claim.id().clone(), name)?)
 }
 
 /// Create a transaction to delete a claim, if the claim exists and stuff.
