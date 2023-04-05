@@ -20,7 +20,7 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::base::{Hash, SecretKey, SignKeypair, SignKeypairPublic},
+    crypto::base::{Hash, HashAlgo, SecretKey, SignKeypair, SignKeypairPublic},
     dag::{Transaction, TransactionID, Transactions},
     identity::{
         keychain::{Key},
@@ -41,8 +41,8 @@ use tracing::{debug, error, info, warn};
 
 /// Turns a secret key into a signing keypair.
 pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
-    let hash = Hash::new_blake2b(seckey.as_ref())?;
-    let seed: [u8; 32] = hash.as_bytes()[0..32].try_into().map_err(|_| Error::ConversionError)?;
+    let hash = Hash::new_blake2b_256(seckey.as_ref())?;
+    let seed: [u8; 32] = hash.as_bytes().try_into().map_err(|_| Error::ConversionError)?;
     Ok(SignKeypair::new_ed25519_from_seed(&seckey, &seed)?)
 }
 
@@ -60,7 +60,7 @@ pub fn shared_key_to_channel(seckey: &SecretKey) -> Result<String> {
 /// and private syncing token (a MAC of our secret key and identity id). If
 /// this key doesn't exist, we generate it and save it into the identity then use it
 /// to generate the token.
-pub fn gen_token(master_key: &SecretKey, transactions: &Transactions) -> Result<(Option<Transaction>, SecretKey)> {
+pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo) -> Result<(Option<Transaction>, SecretKey)> {
     let identity = transactions.build_identity()?;
 
     let sync_key_maybe = identity.keychain()
@@ -74,7 +74,7 @@ pub fn gen_token(master_key: &SecretKey, transactions: &Transactions) -> Result<
         let secretkey = SecretKey::new_xchacha20poly1305()?;
         let key = Key::new_secret(PrivateWithMac::seal(master_key, secretkey)?);
         let transaction = transactions
-            .add_subkey(now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))?;
+            .add_subkey(hash_with, now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))?;
         (Some(transaction), key)
     };
 

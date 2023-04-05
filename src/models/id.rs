@@ -4,7 +4,7 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::base::{SecretKey, SignKeypair, CryptoKeypair},
+    crypto::base::{HashAlgo, SecretKey, SignKeypair, CryptoKeypair},
     dag::{Transaction, TransactionBody, Transactions},
     identity::{ExtendKeypair, AdminKey, AdminKeypair, Key, ClaimSpec, Identity},
     policy::{Capability, MultisigPolicy, Policy},
@@ -26,7 +26,7 @@ pub fn sign_with_optimal_key(identity: &Identity, master_key: &SecretKey, transa
     Err(Error::AdminKeyNotFound)
 }
 
-pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, name: Option<String>, email: Option<String>) -> Result<Transactions> {
+pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, hash_with: &HashAlgo, name: Option<String>, email: Option<String>) -> Result<Transactions> {
     // ask if they want name/email claims, then add three default subkeys (sign,
     // crypto, secret) to their keychain.
     let subkey_sign = SignKeypair::new_ed25519(&master_key)?;
@@ -46,12 +46,12 @@ pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, 
     }
 
     let transactions = sign_and_push! { transactions,
-        [ make_claim, Timestamp::now(), ClaimSpec::Identity(MaybePrivate::new_public(identity.id().clone())), None::<&str> ]
+        [ make_claim, hash_with, Timestamp::now(), ClaimSpec::Identity(MaybePrivate::new_public(identity.id().clone())), None::<&str> ]
     };
     let transactions = match name {
         Some(name) => {
             sign_and_push! { transactions,
-                [ make_claim, Timestamp::now(), ClaimSpec::Name(MaybePrivate::new_public(name)), None::<&str> ]
+                [ make_claim, hash_with, Timestamp::now(), ClaimSpec::Name(MaybePrivate::new_public(name)), None::<&str> ]
             }
         }
         None => transactions,
@@ -59,15 +59,15 @@ pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, 
     let transactions = match email {
         Some(email) => {
             sign_and_push! { transactions,
-                [ make_claim, Timestamp::now(), ClaimSpec::Email(MaybePrivate::new_public(email)), None::<&str> ]
+                [ make_claim, hash_with, Timestamp::now(), ClaimSpec::Email(MaybePrivate::new_public(email)), None::<&str> ]
             }
         }
         None => transactions,
     };
     let transactions = sign_and_push! { transactions,
-        [ add_subkey, Timestamp::now(), Key::new_sign(subkey_sign), "default/sign", Some("A default key for signing documents or messages.") ]
-        [ add_subkey, Timestamp::now(), Key::new_crypto(subkey_crypto), "default/crypto", Some("A default key for receiving private messages.") ]
-        [ add_subkey, Timestamp::now(), Key::new_secret(subkey_secret), "default/secret", Some("A default key allowing encryption/decryption of personal data.") ]
+        [ add_subkey, hash_with, Timestamp::now(), Key::new_sign(subkey_sign), "default/sign", Some("A default key for signing documents or messages.") ]
+        [ add_subkey, hash_with, Timestamp::now(), Key::new_crypto(subkey_crypto), "default/crypto", Some("A default key for receiving private messages.") ]
+        [ add_subkey, hash_with, Timestamp::now(), Key::new_secret(subkey_secret), "default/secret", Some("A default key allowing encryption/decryption of personal data.") ]
     };
     let transactions = db::save_identity(transactions)?;
     let mut conf = config::load()?;
@@ -80,7 +80,7 @@ pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, 
 }
 
 /// Create a new random personal identity.
-pub fn create_personal_random(master_key: &SecretKey, now: Timestamp) -> Result<Transactions> {
+pub fn create_personal_random(master_key: &SecretKey, hash_with: &HashAlgo, now: Timestamp) -> Result<Transactions> {
     let admin = AdminKey::new(AdminKeypair::new_ed25519(&master_key)?, "alpha", Some("Your main admin key"));
     let policy = Policy::new(
         vec![Capability::Permissive],
@@ -88,7 +88,7 @@ pub fn create_personal_random(master_key: &SecretKey, now: Timestamp) -> Result<
     );
     let transactions = Transactions::new();
     let genesis = transactions
-        .create_identity(now.clone(), vec![admin.clone()], vec![policy])?
+        .create_identity(hash_with, now.clone(), vec![admin.clone()], vec![policy])?
         .sign(master_key, &admin)?;
     let transactions2 = transactions.push_transaction(genesis)?;
     Ok(transactions2)
@@ -96,7 +96,7 @@ pub fn create_personal_random(master_key: &SecretKey, now: Timestamp) -> Result<
 
 /// Create a new vanity identity, where the resulting string ID matches a pre-
 /// determined pattern.
-pub fn create_personal_vanity<F>(regex: Option<&str>, contains: Vec<&str>, prefix: Option<&str>, mut progress: F) -> Result<(SecretKey, Transactions, Timestamp)>
+pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, contains: Vec<&str>, prefix: Option<&str>, mut progress: F) -> Result<(SecretKey, Transactions, Timestamp)>
     where F: FnMut(u64),
 {
     let mut counter: u64 = 0;
@@ -139,7 +139,7 @@ pub fn create_personal_vanity<F>(regex: Option<&str>, contains: Vec<&str>, prefi
             vec![Capability::Permissive],
             MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
         );
-        genesis_transaction = empty.create_identity(now.clone(), vec![admin.clone()], vec![policy])?;
+        genesis_transaction = empty.create_identity(hash_with, now.clone(), vec![admin.clone()], vec![policy])?;
         let based = id_str!(genesis_transaction.id())?;
         if filter(&based) {
             genesis_transaction = genesis_transaction.sign(&tmp_master_key, &admin)?;
