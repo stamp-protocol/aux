@@ -193,7 +193,7 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
 ///
 /// Of course, it's possible that two identities with strikingly-similar IDs will also have
 /// strikingly-similar fingerprints. But there's only so much we can do here.
-pub fn fingerprint(identity_id: &IdentityID) -> Result<String> {
+pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
     let hash = Hash::new_blake2b_256(identity_id.deref().deref().as_bytes())?;
     let hash_bytes = hash.as_bytes();
     let hash_color = Hash::new_blake2b_256(hash.as_bytes())?;
@@ -257,25 +257,15 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<String> {
             return [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
         }
 
-        fn disp(&self, h: u8, s: f32, l: f32) -> String {
+        fn disp(&self, h: u8, s: f32, l: f32) -> [u8; 3] {
             let mut gravved = self.h_grav.iter()
                 .map(|g| (g, (h as i16 - g).abs()))
                 .collect::<Vec<_>>();
             gravved.sort_by_key(|x| x.1);
             let h_gravved_255 = (gravved[0].0 + 256) % 256;
-            let rgb = Self::to_rgb(h_gravved_255 as f32 / 255.0, s, l);
-            format!("#{:02x?}{:02x?}{:02x?}", rgb[0], rgb[1], rgb[2])
+            Self::to_rgb(h_gravved_255 as f32 / 255.0, s, l)
         }
     }
-
-    let mut lines: Vec<String> = vec![
-        r#"<svg viewBox="0 0 256 256">"#.into(),
-    ];
-
-    let coord = |val, grid_val| {
-        let ratio = (val as f32) / 16.0;
-        return (ratio * grid_val as f32).round() as u16;
-    };
 
     let split_val = |val: u8| {
         (val & 0xf, (val >> 4) & 0xf)
@@ -290,41 +280,31 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<String> {
     }
     let hsl = Hsl::new(buckets);
 
-    let img_px: u16 = 256;
-    let sq: u16 = 16;
-    let grid_val_x: u8 = 16;
-    let grid_val_y: u8 = 16;
     let mirror_x = true;
     let mirror_y = true;
-    let saturation = 0.7;
-    let lightness = 0.6;
+    let hsl_saturation = 0.7;
+    let hsl_lightness = 0.6;
 
-    let mut draw = |x: u16, y: u16, color: &str| {
-        lines.push(format!(r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill: {};" />"#, x, y, sq, sq, color));
-    };
-
+    let mut points = vec![];
     let mut idx = 0;
     for h in hash_bytes {
         let (x, y) = split_val(*h);
         let color_val = hash_color_bytes[idx];
-        let color = hsl.disp(color_val, saturation, lightness);
-        let xp = coord(x, grid_val_x);
-        let yp = coord(y, grid_val_y);
-        draw(xp * sq, yp * sq, &color);
+        let color = hsl.disp(color_val, hsl_saturation, hsl_lightness);
+        points.push((x, y, color.clone()));
         if mirror_x {
-            draw(img_px - (xp * sq) - sq, yp * sq, &color);
+            points.push((15 - x, y, color.clone()));
         }
         if mirror_y {
-            draw(xp * sq, img_px - (yp * sq) - sq, &color);
+            points.push((x, 15 - y, color.clone()));
         }
         if mirror_x && mirror_y {
-            draw(img_px - (xp * sq) - sq, img_px - (yp * sq) - sq, &color);
+            points.push((15 - x, 15 - y, color.clone()));
         }
         idx += 1;
     }
 
-    lines.push("</svg>".into());
-    Ok(lines.join("\n"))
+    Ok(points)
 }
 
 /*
@@ -391,7 +371,7 @@ mod tests {
         let seed = b"as3dffe";
         let identity_id = IdentityID::from(TransactionID::from(Hash::new_blake2b_512(seed).unwrap()));
         let fp = fingerprint(&identity_id).unwrap();
-        println!("---\n{}", fp);
+        println!("---\n{:?}", fp);
     }
 }
 
