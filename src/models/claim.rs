@@ -16,11 +16,8 @@ use stamp_core::{
     crypto::base::{HashAlgo, SecretKey},
     dag::{Transaction, Transactions},
     identity::{
-        Claim,
-        ClaimSpec,
         IdentityID,
-        Relationship,
-        RelationshipType,
+        claim::{Claim, ClaimSpec, Relationship, RelationshipType},
     },
     private::MaybePrivate,
     rasn::{Encode, Decode},
