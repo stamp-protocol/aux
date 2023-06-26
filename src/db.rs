@@ -48,6 +48,7 @@ fn json_arr(vec: &Vec<String>) -> String {
 
 /// Save an identity to local storage
 pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
+    ensure_schema()?;
     let identity = transactions.build_identity()?;
     let id_str = id_str!(identity.id())?;
     let created = format!("{}", identity.created().format("%+"));
@@ -91,6 +92,7 @@ pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
 
 /// Load an identity by ID.
 pub fn load_identity(id: &IdentityID) -> Result<Option<Transactions>> {
+    ensure_schema()?;
     let conn = conn()?;
     let id_str = id_str!(id)?;
     let qry_res = conn.query_row(
@@ -114,6 +116,7 @@ pub fn load_identity(id: &IdentityID) -> Result<Option<Transactions>> {
 
 /// Load an identity by ID.
 pub fn load_identities_by_prefix(id_prefix: &str) -> Result<Vec<Transactions>> {
+    ensure_schema()?;
     let conn = conn()?;
     let mut stmt = conn.prepare("SELECT data FROM identities WHERE id like ?1 ORDER BY created ASC")?;
     let rows = stmt.query_map(params![format!("{}%", id_prefix)], |row| row.get(0))?;
@@ -128,6 +131,7 @@ pub fn load_identities_by_prefix(id_prefix: &str) -> Result<Vec<Transactions>> {
 
 /// List identities stored locally.
 pub fn list_local_identities(search: Option<&str>) -> Result<Vec<Transactions>> {
+    ensure_schema()?;
     let conn = conn()?;
     let qry = if search.is_some() {
         r#"
@@ -170,6 +174,7 @@ pub fn list_local_identities(search: Option<&str>) -> Result<Vec<Transactions>> 
 }
 
 pub fn find_identity_by_prefix(ty: &str, id_prefix: &str) -> Result<Option<Transactions>> {
+    ensure_schema()?;
     let conn = conn()?;
     let qry = format!(r#"
         SELECT DISTINCT
@@ -205,6 +210,7 @@ pub fn find_identity_by_prefix(ty: &str, id_prefix: &str) -> Result<Option<Trans
 
 /// Delete a local identity by id.
 pub fn delete_identity(id: &str) -> Result<()> {
+    ensure_schema()?;
     let conn = conn()?;
     conn.execute("DELETE FROM identities WHERE id = ?1", params![id])?;
     Ok(())
@@ -214,6 +220,7 @@ pub fn delete_identity(id: &str) -> Result<()> {
 /// the identity. Generally you do this if the transaction needs multiple
 /// signatures before it can be applied.
 pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> Result<Transaction> {
+    ensure_schema()?;
     let id_str = id_str!(identity_id)?;
     let transaction_id = String::try_from(transaction.id())
         .map_err(|_| Error::ConversionError)?;
@@ -237,6 +244,7 @@ pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> 
 
 /// Load a staged transaction by its id.
 pub fn load_staged_transaction(transaction_id: &TransactionID) -> Result<Option<(IdentityID, Transaction)>> {
+    ensure_schema()?;
     let transaction_id_str = String::try_from(transaction_id)
         .map_err(|_| Error::ConversionError)?;
     let conn = conn()?;
@@ -263,6 +271,7 @@ pub fn load_staged_transaction(transaction_id: &TransactionID) -> Result<Option<
 
 /// Find staged transactions by identity id
 pub fn find_staged_transactions(identity_id: &IdentityID) -> Result<Vec<Transaction>> {
+    ensure_schema()?;
     let id_str = id_str!(identity_id)?;
     let conn = conn()?;
     let mut stmt = conn.prepare(r#"
@@ -283,6 +292,7 @@ pub fn find_staged_transactions(identity_id: &IdentityID) -> Result<Vec<Transact
 
 /// Delete a staged transaction.
 pub fn delete_staged_transaction(transaction_id: &TransactionID) -> Result<()> {
+    ensure_schema()?;
     let transaction_id_str = String::try_from(transaction_id)
         .map_err(|_| Error::ConversionError)?;
     let conn = conn()?;
@@ -292,6 +302,7 @@ pub fn delete_staged_transaction(transaction_id: &TransactionID) -> Result<()> {
 
 /// Save a transaction from a private sync record
 pub fn save_sync_transaction(id_str: &str, transaction: TransactionMessageSigned) -> Result<TransactionMessageSigned> {
+    ensure_schema()?;
     let serialized = transaction.serialize()?;
     let conn = conn()?;
     let transaction_id = String::try_from(transaction.transaction().id())?;
@@ -315,6 +326,7 @@ pub fn save_sync_transaction(id_str: &str, transaction: TransactionMessageSigned
 
 /// Find all sync transactions for an identity, excluding the passed list of trans ids.
 pub fn find_sync_transactions(id_str: &str, exclude: &Vec<TransactionID>) -> Result<Vec<TransactionMessageSigned>> {
+    ensure_schema()?;
     let conn = conn()?;
     // NOTE: we DO NOT filter out our excluded transaction IDs in the query because
     // rusqlite gets butthurt when we do dynamic params. instead we just filter the
