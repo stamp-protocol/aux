@@ -4,14 +4,20 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::base::{HashAlgo, SecretKey, SignKeypair, CryptoKeypair},
+    crypto::base::{Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair},
     dag::{Transaction, TransactionBody, Transactions},
-    identity::{ExtendKeypair, AdminKey, AdminKeypair, Key, ClaimSpec, Identity},
+    identity::{
+        Identity,
+        IdentityID,
+        claim::{ClaimSpec},
+        keychain::{ExtendKeypair, AdminKey, AdminKeypair, Key}
+    },
     policy::{Capability, MultisigPolicy, Policy},
     private::{PrivateWithMac, MaybePrivate},
     util::{Timestamp, SerdeBinary},
 };
 use std::convert::TryFrom;
+use std::ops::Deref;
 
 /// Given an identity, master key, and transaction, find the admin key in the identity
 /// most optimal for signing this particular transaction.
@@ -176,6 +182,151 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
     Ok((imported, exists))
 }
 
+/// Takes an identity id and returns a 256x256 pixel-"art" SVG that acts as the fingerprint (a
+/// sloppily unique-ish icon/pictogram) for that identity.
+///
+/// The idea here is that if I have the identity ID "andrew-a90s8d7fhasdf_as9d7afs876" and someone
+/// wants to impersonate me and generates "andrew-a90x987fa0df987_znaksndf" most people will not
+/// be able to immediately discern the difference. The fingerprint allows a very quick visual
+/// indicator that (hopefully) provides enough uniqueness across various identities that two
+/// similar identity IDs will have wildly different fingerprints.
+///
+/// Of course, it's possible that two identities with strikingly-similar IDs will also have
+/// strikingly-similar fingerprints. But there's only so much we can do here.
+pub fn fingerprint(identity_id: &IdentityID) -> Result<String> {
+    let hash = Hash::new_blake2b_256(identity_id.deref().deref().as_bytes())?;
+    let hash_bytes = hash.as_bytes();
+    let hash_color = Hash::new_blake2b_256(hash.as_bytes())?;
+    let hash_color_bytes = hash_color.as_bytes();
+
+    struct Hsl {
+        h_grav: Vec<i16>,
+    }
+
+    impl Hsl {
+        fn new(h_grav_initial: Vec<u64>) -> Self {
+            let mut h_grav_mod = h_grav_initial.into_iter()
+                .map(|x| (x % 256) as i16)
+                .collect::<Vec<i16>>();
+            h_grav_mod.sort();
+            let mut h_grav = Vec::with_capacity(h_grav_mod.len() + 2);
+            if let Some(last) = h_grav_mod.last() {
+                h_grav.push(last - 256)
+            }
+            let first = h_grav_mod.first().map(|x| x.clone());
+            for x in h_grav_mod {
+                h_grav.push(x);
+            }
+            if let Some(first) = first {
+                h_grav.push(first + 256);
+            }
+            Self { h_grav }
+        }
+
+        fn to_rgb(h: f32, s: f32, l: f32) -> [u8; 3] {
+            let (r, g, b) = if s == 0.0 {
+                (l, l, l)
+            } else {
+                let one_third = 1.0 / 3.0;
+                let hue_to_rgb = |p, q, t| {
+                    let t = if t < 0.0 {
+                        t + 1.0
+                    } else if t > 1.0 {
+                        t - 1.0
+                    } else {
+                        t
+                    };
+                    if t < (1.0/6.0) {
+                        return p + (q - p) * 6.0 * t;
+                    } else if t < (1.0/2.0) {
+                        return q;
+                    } else if t < (2.0/3.0) {
+                        return p + (q - p) * ((2.0 / 3.0) - t) * 6.0;
+                    } else {
+                        return p;
+                    }
+                };
+                let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+                let p = 2.0 * l - q;
+                (
+                    hue_to_rgb(p, q, h + one_third),
+                    hue_to_rgb(p, q, h),
+                    hue_to_rgb(p, q, h - one_third),
+                )
+            };
+            return [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
+        }
+
+        fn disp(&self, h: u8, s: f32, l: f32) -> String {
+            let mut gravved = self.h_grav.iter()
+                .map(|g| (g, (h as i16 - g).abs()))
+                .collect::<Vec<_>>();
+            gravved.sort_by_key(|x| x.1);
+            let h_gravved_255 = (gravved[0].0 + 256) % 256;
+            let rgb = Self::to_rgb(h_gravved_255 as f32 / 255.0, s, l);
+            format!("#{:02x?}{:02x?}{:02x?}", rgb[0], rgb[1], rgb[2])
+        }
+    }
+
+    let mut lines: Vec<String> = vec![
+        r#"<svg viewBox="0 0 256 256">"#.into(),
+    ];
+
+    let coord = |val, grid_val| {
+        let ratio = (val as f32) / 16.0;
+        return (ratio * grid_val as f32).round() as u16;
+    };
+
+    let split_val = |val: u8| {
+        (val & 0xf, (val >> 4) & 0xf)
+    };
+
+    let hsl_buckets = 2;
+    let mut buckets = vec![0; hsl_buckets];
+    let mut idx = 0;
+    for v in hash_color_bytes {
+        buckets[idx % hsl_buckets] += *v as u64;
+        idx += 1;
+    }
+    let hsl = Hsl::new(buckets);
+
+    let img_px: u16 = 256;
+    let sq: u16 = 16;
+    let grid_val_x: u8 = 16;
+    let grid_val_y: u8 = 16;
+    let mirror_x = true;
+    let mirror_y = true;
+    let saturation = 0.7;
+    let lightness = 0.6;
+
+    let mut draw = |x: u16, y: u16, color: &str| {
+        lines.push(format!(r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill: {};" />"#, x, y, sq, sq, color));
+    };
+
+    let mut idx = 0;
+    for h in hash_bytes {
+        let (x, y) = split_val(*h);
+        let color_val = hash_color_bytes[idx];
+        let color = hsl.disp(color_val, saturation, lightness);
+        let xp = coord(x, grid_val_x);
+        let yp = coord(y, grid_val_y);
+        draw(xp * sq, yp * sq, &color);
+        if mirror_x {
+            draw(img_px - (xp * sq) - sq, yp * sq, &color);
+        }
+        if mirror_y {
+            draw(xp * sq, img_px - (yp * sq) - sq, &color);
+        }
+        if mirror_x && mirror_y {
+            draw(img_px - (xp * sq) - sq, img_px - (yp * sq) - sq, &color);
+        }
+        idx += 1;
+    }
+
+    lines.push("</svg>".into());
+    Ok(lines.join("\n"))
+}
+
 /*
 pub fn export_private(id: &str) -> Result<Vec<u8>, String> {
     let identity = try_load_single_identity(id)?;
@@ -226,4 +377,21 @@ pub fn view(search: &str) -> Result<String, String> {
     Ok(serialized)
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stamp_core::{
+        crypto::base::Hash,
+        dag::{TransactionID},
+    };
+
+    #[test]
+    fn fingerprint_svg() {
+        let seed = b"as3dffe";
+        let identity_id = IdentityID::from(TransactionID::from(Hash::new_blake2b_512(seed).unwrap()));
+        let fp = fingerprint(&identity_id).unwrap();
+        println!("---\n{}", fp);
+    }
+}
 
