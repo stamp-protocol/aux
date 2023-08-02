@@ -15,10 +15,6 @@ pub enum Error {
     #[error("bad home dir")]
     BadHomeDir,
 
-    /// Channel recv error
-    #[error("channel recv: {0}")]
-    ChannelRecv(#[from] async_std::channel::RecvError),
-
     /// Channel send error
     #[error("channel send: {0}")]
     ChannelSend(String),
@@ -90,6 +86,10 @@ pub enum Error {
     /// An error occured in the Stamp protocol itself
     #[error("stamp error: {0}")]
     Stamp(#[from] stamp_core::error::Error),
+
+    /// An error occured joining a task
+    #[error("task join error: {0}")]
+    Task(#[from] tokio::task::JoinError),
 
     /// An error occurred processing TOML crap
     #[error("TOML error: {0}")]

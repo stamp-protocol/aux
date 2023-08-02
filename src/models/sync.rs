@@ -13,7 +13,6 @@
 //! live on public/cloud servers and act as message-passers but don't have access
 //! to the data itself.
 
-use async_std::{channel, task};
 use crate::{
     config::{self, NetConfig},
     db,
@@ -37,6 +36,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::Duration;
+use tokio::{task, time, sync::mpsc as channel};
 use tracing::{debug, error, info, warn};
 
 /// Turns a secret key into a signing keypair.
@@ -326,7 +326,7 @@ async fn process_sync_event(event: sync::Event, identity_id: &str, shared_key: &
 /// This will join the larger StampNet network if given a set of nodes to join
 /// and will help other nodes' discovery via DHT.
 #[tracing::instrument(skip(id_str, channel, shared_key, bind, join))]
-pub fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, bind: Multiaddr, join: Vec<Multiaddr>) -> Result<()> {
+pub async fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, bind: Multiaddr, join: Vec<Multiaddr>) -> Result<()> {
     for part in bind.iter() {
         if !matches!(part, Protocol::Ip4(_) | Protocol::Ip6(_) | Protocol::Tcp(_)) {
             Err(Error::InvalidProtocol(String::from("can only bind to ipv4/ipv6/tcp")))?;
@@ -354,129 +354,38 @@ pub fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, bind: 
             Err(e) => error!("Dial {:?} failed: {:?}", address, e),
         };
     }
-    let (core_incoming_send, core_incoming_recv) = channel::bounded::<core::Command>(16);
-    let (core_outgoing_send, core_outgoing_recv) = channel::bounded::<core::Event>(16);
-    let (sync_incoming_send, sync_incoming_recv) = channel::bounded::<sync::Command>(16);
-    let (sync_outgoing_send, sync_outgoing_recv) = channel::bounded::<sync::Event>(16);
+    let (core_incoming_send, core_incoming_recv) = channel::channel::<core::Command>(16);
+    let (core_outgoing_send, core_outgoing_recv) = channel::channel::<core::Event>(16);
+    let (sync_incoming_send, sync_incoming_recv) = channel::channel::<sync::Command>(16);
+    let (sync_outgoing_send, mut sync_outgoing_recv) = channel::channel::<sync::Event>(16);
     let channel = String::from(channel);
     let identity_id = String::from(id_str);
-    async_std::task::block_on(async move {
-        let runner = task::spawn(async move {
-            stamp_net::core::run(swarm, core_incoming_recv, core_outgoing_send).await
-        });
-        // this MITMs the core events and spits out sync events (and takes sync commands)
-        let syncer = task::spawn(async move {
-            stamp_net::sync::run(&channel, &sync_pubkey, core_incoming_send, core_outgoing_recv, sync_incoming_recv, sync_outgoing_send).await
-        });
-        let events = task::spawn(async move {
-            loop {
-                let event = sync_outgoing_recv.recv().await?;
-                if matches!(event, sync::Event::Quit) {
-                    break;
-                }
-                match process_sync_event(event, identity_id.as_str(), &shared_key, &sync_signkey, &sync_incoming_send).await {
-                    Err(e) => error!("Problem processing incoming event: {}", e),
-                    _ => {}
-                }
+    let runner = task::spawn(async move {
+        stamp_net::core::run(swarm, core_incoming_recv, core_outgoing_send).await
+    });
+    // this MITMs the core events and spits out sync events (and takes sync commands)
+    let syncer = task::spawn(async move {
+        stamp_net::sync::run(&channel, &sync_pubkey, core_incoming_send, core_outgoing_recv, sync_incoming_recv, sync_outgoing_send).await
+    });
+    let events = task::spawn(async move {
+        loop {
+            let event = match sync_outgoing_recv.recv().await {
+                Some(x) => x,
+                None => break,
+            };
+            if matches!(event, sync::Event::Quit) {
+                break;
             }
-            Ok::<(), Error>(())
-        });
-        runner.await?;
-        syncer.await?;
-        events.await?;
-        Ok(())
-    })
-}
-
-/// Create a long-lived sync listener.
-///
-/// This will join the larger StampNet network if given a set of nodes to join
-/// and will help other nodes' discovery via DHT.
-#[tracing::instrument(skip(id_str, channel, shared_key, join))]
-pub fn run(id_str: &str, channel: &str, shared_key: SecretKey, join: Vec<Multiaddr>) -> Result<(usize, usize)> {
-    // our channel is also a base64-serialized public key that can be used to
-    // verify transaction parts signed by full nodes.
-    let key_bytes = stamp_core::util::base64_decode(channel)?;
-    let sync_pubkey = SignKeypairPublic::deserialize(&key_bytes)?;
-    let sync_signkey = Some(shared_key_to_sign_key(&shared_key)?);
-    let shared_key_wrap = Some(shared_key);
-
-    let resolved = process_joinlist(join)?;
-    let local_key = stamp_net::random_peer_key();
-
-    info!("Running sync -- id: {} / channel: {}", id_str, channel);
-    let mut swarm = stamp_net::setup(local_key, false)?;
-    for address in &resolved {
-        match swarm.dial(address.clone()) {
-            Ok(_) => info!("Dialed {:?}", address),
-            Err(e) => error!("Dial {:?} failed: {:?}", address, e),
-        };
-    }
-    let (core_incoming_send, core_incoming_recv) = channel::bounded::<core::Command>(16);
-    let (core_outgoing_send, core_outgoing_recv) = channel::bounded::<core::Event>(16);
-    let (sync_incoming_send, sync_incoming_recv) = channel::bounded::<sync::Command>(16);
-    let (sync_outgoing_send, sync_outgoing_recv) = channel::bounded::<sync::Event>(16);
-    let channel = String::from(channel);
-    let identity_id = String::from(id_str);
-    async_std::task::block_on(async move {
-        let runner = task::spawn(async move {
-            stamp_net::core::run(swarm, core_incoming_recv, core_outgoing_send).await
-        });
-        // this MITMs the core events and spits out sync events (and takes sync commands)
-        let syncer = task::spawn(async move {
-            stamp_net::sync::run(&channel, &sync_pubkey, core_incoming_send, core_outgoing_recv, sync_incoming_recv, sync_outgoing_send).await
-        });
-        let events = task::spawn(async move {
-            // create/run a timer that quits after Ns of inactivity
-            const IDLE_TIMEOUT_SECS: u64 = 5;
-            let mut timer: Option<task::JoinHandle<()>> = None;
-            async fn reset_timer(secs: u64, timer: Option<task::JoinHandle<()>>, sync_incoming_send: &channel::Sender<sync::Command>) -> Option<task::JoinHandle<()>> {
-                if let Some(task) = timer {
-                    task.cancel().await;
-                }
-                let sync_incoming_send2 = sync_incoming_send.clone();
-                Some(task::spawn(async move {
-                    task::sleep(Duration::from_secs(secs)).await;
-                    info!("Finished syncing, sending quit signal");
-                    match sync_incoming_send2.send(sync::Command::Quit).await {
-                        Err(e) => error!("Error ending main run loop: {}", e),
-                        _ => {}
-                    }
-                }))
+            match process_sync_event(event, identity_id.as_str(), &shared_key, &sync_signkey, &sync_incoming_send).await {
+                Err(e) => error!("Problem processing incoming event: {}", e),
+                _ => {}
             }
-            let mut init = false;
-            let mut sent = 0;
-            let mut recv = 0;
-            timer = reset_timer(30, timer, &sync_incoming_send).await;
-            loop {
-                let event = sync_outgoing_recv.recv().await?;
-                if matches!(event, sync::Event::Quit) {
-                    break;
-                }
-                match process_sync_event(event, identity_id.as_str(), &shared_key_wrap, &sync_signkey, &sync_incoming_send).await {
-                    Ok(ProcessResult::SavedTransactions(len)) => {
-                        timer = reset_timer(IDLE_TIMEOUT_SECS, timer, &sync_incoming_send).await;
-                        recv += len;
-                    }
-                    Ok(ProcessResult::SentTransactions(len)) => {
-                        timer = reset_timer(IDLE_TIMEOUT_SECS, timer, &sync_incoming_send).await;
-                        sent += len;
-                    }
-                    Ok(ProcessResult::RequestedIdentity) | Ok(ProcessResult::Subscribed) => {
-                        if !init {
-                            timer = reset_timer(15, timer, &sync_incoming_send).await;
-                            init = true;
-                        }
-                    }
-                    Err(e) => error!("Problem processing incoming event: {}", e),
-                    _ => {}
-                }
-            }
-            Ok((sent, recv))
-        });
-        runner.await?;
-        syncer.await?;
-        events.await
-    })
+        }
+        Ok::<(), Error>(())
+    });
+    runner.await??;
+    syncer.await??;
+    events.await??;
+    Ok(())
 }
 
