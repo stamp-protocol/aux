@@ -194,40 +194,59 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
 /// Of course, it's possible that two identities with strikingly-similar IDs will also have
 /// strikingly-similar fingerprints. But there's only so much we can do here.
 pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
+    // hash our identity id. no matter the hash format, this gives us a uniform length.
     let hash = Hash::new_blake2b_256(identity_id.deref().deref().as_bytes())?;
     let hash_bytes = hash.as_bytes();
+    // hash the hash...this makes it so if two hashes are similar (but slightly different)
+    // then the colors of the resulting fingerprints are more likely to be different.
     let hash_color = Hash::new_blake2b_256(hash.as_bytes())?;
     let hash_color_bytes = hash_color.as_bytes();
 
     struct Hsl {
-        h_grav: Vec<i16>,
+        /// this is a list of 256-based hue values. generally, generated off of
+        /// `hash_color_bytes`. the idea is we don't want to overwhelm with a
+        /// broad spectrum of colors, so we pick N (generally 2-3) and snap to them
+        /// based on distance.
+        h_grav: Vec<(i16, [u8; 3])>,
+        saturation: f32,
+        lightness: f32,
     }
 
     impl Hsl {
-        fn new(h_grav_initial: Vec<u64>) -> Self {
+        fn new(h_grav_initial: Vec<u64>, saturation: f32, lightness: f32) -> Self {
+            // process our snapped colors such that if we have
+            //   [23, 188, 245]
+            // we end with
+            //   [-11, 23, 188, 245, 279]
+            // so if we have a hue value of, say 0 we snap to -11 which is really
+            // 245 (instead of 23) because it's closer to the hue we want (because it
+            // wraps)
             let mut h_grav_mod = h_grav_initial.into_iter()
                 .map(|x| (x % 256) as i16)
                 .collect::<Vec<i16>>();
             h_grav_mod.sort();
             let mut h_grav = Vec::with_capacity(h_grav_mod.len() + 2);
             if let Some(last) = h_grav_mod.last() {
-                h_grav.push(last - 256)
+                h_grav.push((last - 256, Hsl::to_rgb(*last as f32 / 255.0, saturation, lightness)));
             }
             let first = h_grav_mod.first().map(|x| x.clone());
             for x in h_grav_mod {
-                h_grav.push(x);
+                h_grav.push((x, Hsl::to_rgb(x as f32 / 255.0, saturation, lightness)));
             }
             if let Some(first) = first {
-                h_grav.push(first + 256);
+                h_grav.push((first + 256, Hsl::to_rgb(first as f32 / 255.0, saturation, lightness)));
             }
-            Self { h_grav }
+            Self {
+                h_grav,
+                saturation,
+                lightness,
+            }
         }
 
         fn to_rgb(h: f32, s: f32, l: f32) -> [u8; 3] {
             let (r, g, b) = if s == 0.0 {
                 (l, l, l)
             } else {
-                let one_third = 1.0 / 3.0;
                 let hue_to_rgb = |p, q, t| {
                     let t = if t < 0.0 {
                         t + 1.0
@@ -248,49 +267,66 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
                 };
                 let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
                 let p = 2.0 * l - q;
+                let one_third = 1.0 / 3.0;
                 (
                     hue_to_rgb(p, q, h + one_third),
                     hue_to_rgb(p, q, h),
                     hue_to_rgb(p, q, h - one_third),
                 )
             };
-            return [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
+            return [
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+            ];
         }
 
-        fn disp(&self, h: u8, s: f32, l: f32) -> [u8; 3] {
+        fn disp(&self, h: u8, s: Option<f32>, l: Option<f32>) -> [u8; 3] {
+            // snap to a predetermined hue value by distance
             let mut gravved = self.h_grav.iter()
-                .map(|g| (g, (h as i16 - g).abs()))
+                .map(|(g, rgb_precomp)| (g, (h as i16 - g).abs(), rgb_precomp))
                 .collect::<Vec<_>>();
             gravved.sort_by_key(|x| x.1);
+            let precomputed_rgb = gravved[0].2;
             let h_gravved_255 = (gravved[0].0 + 256) % 256;
-            Self::to_rgb(h_gravved_255 as f32 / 255.0, s, l)
+            let h_gravved_float = h_gravved_255 as f32 / 255.0;
+            match (s, l) {
+                (Some(s), Some(l)) => Self::to_rgb(h_gravved_float, s, l),
+                (Some(s), None) => Self::to_rgb(h_gravved_float, s, self.lightness),
+                (None, Some(l)) => Self::to_rgb(h_gravved_float, self.saturation, l),
+                (None, None) => precomputed_rgb.clone(),
+            }
         }
     }
 
+    // stretch a u8 into two u4, which conveniently allows for a 16x16 grid (what a coincidence)
     let split_val = |val: u8| {
         (val & 0xf, (val >> 4) & 0xf)
     };
 
+    // generate our "allowed" color hues
     let hsl_buckets = 2;
     let mut buckets = vec![0; hsl_buckets];
     let mut idx = 0;
+    // note we pull from the color hash, NOT the data hash
     for v in hash_color_bytes {
         buckets[idx % hsl_buckets] += *v as u64;
         idx += 1;
     }
-    let hsl = Hsl::new(buckets);
 
     let mirror_x = true;
     let mirror_y = true;
     let hsl_saturation = 0.7;
     let hsl_lightness = 0.6;
+    let hsl = Hsl::new(buckets, hsl_saturation, hsl_lightness);
 
     let mut points = vec![];
     let mut idx = 0;
     for h in hash_bytes {
+        // turn our byte into two 16x16 x/y coords
         let (x, y) = split_val(*h);
-        let color_val = hash_color_bytes[idx];
-        let color = hsl.disp(color_val, hsl_saturation, hsl_lightness);
+        // grab a color from the color hash (NOT the data hash)
+        let color = hsl.disp(hash_color_bytes[idx], None, None);
         points.push((x, y, color.clone()));
         if mirror_x {
             points.push((15 - x, y, color.clone()));
