@@ -47,6 +47,10 @@ pub enum Error {
     #[error("dns lookup failure: {0}")]
     DnsLookupFailure(String),
 
+    /// HTTP server serror
+    #[error("HTTP server error: {0}")]
+    Http(#[from] axum::Error),
+
     /// Expected exactly one identity, found multiple
     #[error("expected exactly one identity with id {0} but found multiple")]
     IdentityCollision(String),

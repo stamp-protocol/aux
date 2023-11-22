@@ -35,14 +35,13 @@ use stamp_net::{
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::time::Duration;
-use tokio::{task, time, sync::mpsc as channel};
+use tokio::{task, sync::mpsc as channel};
 use tracing::{debug, error, info, warn};
 
 /// Turns a secret key into a signing keypair.
 pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
-    let hash = Hash::new_blake2b_256(seckey.as_ref())?;
-    let seed: [u8; 32] = hash.as_bytes().try_into().map_err(|_| Error::ConversionError)?;
+    let hash = Hash::new_blake2b_512_keyed(seckey.as_ref(), &[0][..], b"stamp-ksf", &[])?;
+    let seed: [u8; 32] = hash.as_bytes()[0..32].try_into().map_err(|_| Error::ConversionError)?;
     Ok(SignKeypair::new_ed25519_from_seed(&seckey, &seed)?)
 }
 
@@ -56,10 +55,9 @@ pub fn shared_key_to_channel(seckey: &SecretKey) -> Result<String> {
     Ok(channel)
 }
 
-/// Returns a private syncing key ([SecretKey][stamp_core::crypto::key::SecretKey])
-/// and private syncing token (a MAC of our secret key and identity id). If
-/// this key doesn't exist, we generate it and save it into the identity then use it
-/// to generate the token.
+/// Returns a private syncing key ([SecretKey]) and private syncing token (a MAC of our
+/// secret key and topic). If this key doesn't exist, we generate it and save it into the
+/// identity then use it to generate the token.
 pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo) -> Result<(Option<Transaction>, SecretKey)> {
     let identity = transactions.build_identity()?;
 

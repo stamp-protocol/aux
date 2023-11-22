@@ -1,5 +1,6 @@
 use crate::error::{Result, Error};
 use dirs;
+use stamp_core::identity::IdentityID;
 use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -51,5 +52,18 @@ macro_rules! id_str_split {
             Err(..) => (String::from("<error serializing ID>"), String::from("<error serializing ID>")),
         }
     }
+}
+
+/// A message we can send to a UI to tell it about or ask for something.
+#[derive(Debug, Clone)]
+pub enum UIMessage {
+    /// Create a desktop or mobile notification
+    Notification {
+        title: String,
+        body: String,
+        icon: Option<String>,
+    },
+    /// The UI should prompt for a passphrase to unlock the given identity
+    UnlockIdentity(IdentityID),
 }
 

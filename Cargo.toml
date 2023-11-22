@@ -7,6 +7,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+axum = "0.6.19"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "3.0"
 regex = "1.4"
@@ -19,6 +20,7 @@ stamp-net = { path = "../net" }
 thiserror = "1.0"
 toml = "0.5"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
+tower-http = { version = "0.4.3", features = ["trace"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ureq = "2.0.1"

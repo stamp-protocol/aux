@@ -32,9 +32,8 @@ pub fn sign_with_optimal_key(identity: &Identity, master_key: &SecretKey, transa
     Err(Error::AdminKeyNotFound)
 }
 
+/// Set up a new identity with name, email, and randomly-generated subkeys.
 pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, hash_with: &HashAlgo, name: Option<String>, email: Option<String>) -> Result<Transactions> {
-    // ask if they want name/email claims, then add three default subkeys (sign,
-    // crypto, secret) to their keychain.
     let subkey_sign = SignKeypair::new_ed25519(&master_key)?;
     let subkey_crypto = CryptoKeypair::new_curve25519xchacha20poly1305(&master_key)?;
     let subkey_secret = PrivateWithMac::seal(&master_key, SecretKey::new_xchacha20poly1305()?)?;
