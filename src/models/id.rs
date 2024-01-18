@@ -4,7 +4,10 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::base::{Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair},
+    crypto::base::{
+        Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair,
+        rng,
+    },
     dag::{Transaction, TransactionBody, Transactions},
     identity::{
         Identity,
@@ -13,8 +16,8 @@ use stamp_core::{
         keychain::{ExtendKeypair, AdminKey, AdminKeypair, Key}
     },
     policy::{Capability, MultisigPolicy, Policy},
-    private::{PrivateWithMac, MaybePrivate},
-    util::{Timestamp, SerdeBinary},
+    private::{PrivateWithHmac, MaybePrivate},
+    util::{DeText, SerdeBinary, Timestamp},
 };
 use std::convert::TryFrom;
 use std::ops::Deref;
@@ -34,9 +37,11 @@ pub fn sign_with_optimal_key(identity: &Identity, master_key: &SecretKey, transa
 
 /// Set up a new identity with name, email, and randomly-generated subkeys.
 pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, hash_with: &HashAlgo, name: Option<String>, email: Option<String>) -> Result<Transactions> {
-    let subkey_sign = SignKeypair::new_ed25519(&master_key)?;
-    let subkey_crypto = CryptoKeypair::new_curve25519xchacha20poly1305(&master_key)?;
-    let subkey_secret = PrivateWithMac::seal(&master_key, SecretKey::new_xchacha20poly1305()?)?;
+    let mut rng = rng::chacha20();
+    let subkey_sign = SignKeypair::new_ed25519(&mut rng, &master_key)?;
+    let subkey_crypto = CryptoKeypair::new_curve25519xchacha20poly1305(&mut rng, &master_key)?;
+    let sk_tmp = SecretKey::new_xchacha20poly1305(&mut rng)?;
+    let subkey_secret = PrivateWithHmac::seal(&mut rng, &master_key, sk_tmp)?;
     let identity = transactions.build_identity()?;
     macro_rules! sign_and_push {
         ($transactions:expr, $([ $fn:ident, $($args:expr),* ])*) => {{
@@ -86,7 +91,8 @@ pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, 
 
 /// Create a new random personal identity.
 pub fn create_personal_random(master_key: &SecretKey, hash_with: &HashAlgo, now: Timestamp) -> Result<Transactions> {
-    let admin = AdminKey::new(AdminKeypair::new_ed25519(&master_key)?, "alpha", Some("Your main admin key"));
+    let mut rng = rng::chacha20();
+    let admin = AdminKey::new(AdminKeypair::new_ed25519(&mut rng, &master_key)?, "alpha", Some("Your main admin key"));
     let policy = Policy::new(
         vec![Capability::Permissive],
         MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
@@ -104,6 +110,9 @@ pub fn create_personal_random(master_key: &SecretKey, hash_with: &HashAlgo, now:
 pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, contains: Vec<&str>, prefix: Option<&str>, mut progress: F) -> Result<(SecretKey, Transactions, Timestamp)>
     where F: FnMut(u64),
 {
+    // we favor speed here, because we want this to be as fast as possible while still being
+    // reasonably secure. so use 8 rounds instead of 20.
+    let mut rng = rng::chacha8();
     let mut counter: u64 = 0;
     let regex = if let Some(re) = regex {
         Some(regex::Regex::new(re)?)
@@ -135,11 +144,11 @@ pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, cont
 
     let mut now;
     let mut genesis_transaction;
-    let tmp_master_key = SecretKey::new_xchacha20poly1305()?;
+    let tmp_master_key = SecretKey::new_xchacha20poly1305(&mut rng)?;
     let empty = Transactions::new();
     loop {
         now = Timestamp::now();
-        let admin = AdminKey::new(AdminKeypair::new_ed25519(&tmp_master_key)?, "alpha", Some("Your main admin key"));
+        let admin = AdminKey::new(AdminKeypair::new_ed25519(&mut rng, &tmp_master_key)?, "alpha", Some("Your main admin key"));
         let policy = Policy::new(
             vec![Capability::Permissive],
             MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
@@ -163,7 +172,14 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
     // first try importing an owned identity
     let imported = Transactions::deserialize_binary(contents)
         .or_else(|_| {
-            let trans = Transaction::deserialize_binary(contents)?;
+            let trans = match Transaction::deserialize_binary(contents) {
+                Ok(trans) => trans,
+                Err(_) => {
+                    let yaml = String::from_utf8(Vec::from(contents))
+                        .map_err(|_| Error::DeserializeFailure)?;
+                    Transaction::deserialize_text(&yaml)?
+                }
+            };
             match trans.entry().body() {
                 TransactionBody::PublishV1 { transactions } => {
                     Ok(*(transactions.clone()))
@@ -181,7 +197,7 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
     Ok((imported, exists))
 }
 
-/// Takes an identity id and returns a 256x256 pixel-"art" SVG that acts as the fingerprint (a
+/// Takes an identity id and returns a 16x16 RGB pixel-"art" array that acts as the fingerprint (a
 /// sloppily unique-ish icon/pictogram) for that identity.
 ///
 /// The idea here is that if I have the identity ID "andrew-a90s8d7fhasdf_as9d7afs876" and someone
@@ -193,17 +209,18 @@ pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>
 /// Of course, it's possible that two identities with strikingly-similar IDs will also have
 /// strikingly-similar fingerprints. But there's only so much we can do here.
 pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
-    // hash our identity id. no matter the hash format, this gives us a uniform length.
-    let hash = Hash::new_blake2b_256(identity_id.deref().deref().as_bytes())?;
-    let hash_bytes = hash.as_bytes();
-    // hash the hash...this makes it so if two hashes are similar (but slightly different)
-    // then the colors of the resulting fingerprints are more likely to be different.
-    let hash_color = Hash::new_blake2b_256(hash.as_bytes())?;
-    let hash_color_bytes = hash_color.as_bytes();
+    // take a 64-byte hash of our identity id. we then use the first 32 bytes to determine the
+    // shape of our fingerprint, and the last 32 bytes to determine the colors of our identity.
+    // the reason for this (instead of just using a 32 byte hash for both the shape and the color)
+    // is to make sure that if two identities have a similar shape, they have a greater chance of
+    // having different colors, and vice versa.
+    let hash = Hash::new_blake3(identity_id.deref().deref().as_bytes())?;
+    let id_bytes = &hash.as_bytes()[0..16];
+    let color_bytes = &hash.as_bytes()[16..32];
 
     struct Hsl {
         /// this is a list of 256-based hue values. generally, generated off of
-        /// `hash_color_bytes`. the idea is we don't want to overwhelm with a
+        /// `color_bytes`. the idea is we don't want to overwhelm with a
         /// broad spectrum of colors, so we pick N (generally 2-3) and snap to them
         /// based on distance.
         h_grav: Vec<(i16, [u8; 3])>,
@@ -298,34 +315,36 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
         }
     }
 
-    // stretch a u8 into two u4, which conveniently allows for a 16x16 grid (what a coincidence)
-    let split_val = |val: u8| {
-        (val & 0xf, (val >> 4) & 0xf)
-    };
-
     // generate our "allowed" color hues
     let hsl_buckets = 2;
     let mut buckets = vec![0; hsl_buckets];
     let mut idx = 0;
     // note we pull from the color hash, NOT the data hash
-    for v in hash_color_bytes {
+    for v in color_bytes {
         buckets[idx % hsl_buckets] += *v as u64;
         idx += 1;
     }
 
     let mirror_x = true;
-    let mirror_y = true;
+    let mirror_y = false;
     let hsl_saturation = 0.7;
     let hsl_lightness = 0.6;
     let hsl = Hsl::new(buckets, hsl_saturation, hsl_lightness);
 
     let mut points = vec![];
+
+    /*
+    // stretch a u8 into two u4, which conveniently allows for a 16x16 grid (what a coincidence)
+    let split_val = |val: u8| {
+        (val & 0xf, (val >> 4) & 0xf)
+    };
     let mut idx = 0;
-    for h in hash_bytes {
+    for h in id_bytes {
         // turn our byte into two 16x16 x/y coords
         let (x, y) = split_val(*h);
+        println!("x/y: {} {} ", x, y);
         // grab a color from the color hash (NOT the data hash)
-        let color = hsl.disp(hash_color_bytes[idx], None, None);
+        let color = hsl.disp(color_bytes[idx], None, None);
         points.push((x, y, color.clone()));
         if mirror_x {
             points.push((15 - x, y, color.clone()));
@@ -338,8 +357,78 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
         }
         idx += 1;
     }
+    */
+    let truncate = 2;
+    for i in 0..id_bytes.len() {
+        let byte = id_bytes[i];
+        for bit in (0..8).rev() {
+            let on = (byte >> bit) & 1;
+            if on == 1 {
+                let bitnum = ((i * 8) + bit) as u8;
+                let y = (bitnum * truncate as u8) / 16;
+                let x = bitnum % (16 / truncate as u8);
+                let colorbits: u32 = ((color_bytes[i] as u32) << 8) + (color_bytes[(i + 1) % color_bytes.len()] as u32);
+                let colorbyte = ((colorbits << bit) & 0xFF00) >> 8;
+                let color = hsl.disp(colorbyte as u8, None, None);
+                points.push((x, y, color.clone()));
+                if mirror_x {
+                    points.push((15 - x, y, color.clone()));
+                }
+                if mirror_y {
+                    points.push((x, 15 - y, color.clone()));
+                }
+                if mirror_x && mirror_y {
+                    points.push((15 - x, 15 - y, color.clone()));
+                }
+            }
+        }
+    }
+    /*
+    let num_bits = id_bytes.len() * 8;
+    let num_bits_sqrt = (num_bits as f32).sqrt();
+    let scale = 256.0 / num_bits as f32;
+    for i in 0..id_bytes.len() {
+        let byte = id_bytes[i];
+        for bit in (0..8).rev() {
+            let on = (byte >> bit) & 1;
+            if on == 1 {
+                let bitnum = ((i * 8) + bit) as f32;
+                let y = ((bitnum / num_bits_sqrt) * (16.0 / num_bits_sqrt)) as u8;
+                let x = ((bitnum % num_bits_sqrt) * (16.0 / num_bits_sqrt)) as u8;
+                println!("x: (({} * {}) % 16) = {}", bitnum, scale, x);
+
+                let colorbits: u32 = ((color_bytes[i] as u32) << 8) + (color_bytes[(i + 1) % color_bytes.len()] as u32);
+                let colorbyte = ((colorbits << bit) & 0xFF00) >> 8;
+                let color = hsl.disp(colorbyte as u8, None, None);
+
+                points.push((x, y, color.clone()));
+                //println!("push: {} {} {:?}", x, y, color);
+                if mirror_x {
+                    points.push((15 - x, y, color.clone()));
+                }
+                if mirror_y {
+                    points.push((x, 15 - y, color.clone()));
+                }
+                if mirror_x && mirror_y {
+                    points.push((15 - x, 15 - y, color.clone()));
+                }
+            }
+        }
+    }
+    */
 
     Ok(points)
+}
+
+/// Takes an identity [`fingerprint`] and turns it into a pretty SVG.
+pub fn fingerprint_to_svg(fingerprint: &Vec<(u8, u8, [u8; 3])>) -> String {
+    let mut lines: Vec<String> = vec![r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" style="background-color: #000000;">"#.into()];
+    for (x, y, rgb) in fingerprint {
+        let hex = format!("{:02x?}{:02x?}{:02x?}", rgb[0], rgb[1], rgb[2]);
+        lines.push(format!(r#"<rect x="{}" y="{}" width="16" height="16" style="fill: #{};" />"#, x * 16, y * 16, hex));
+    }
+    lines.push("</svg>".into());
+    lines.join("\n")
 }
 
 /*
@@ -404,7 +493,7 @@ mod tests {
     #[test]
     fn fingerprint_svg() {
         let seed = b"as3dffe";
-        let identity_id = IdentityID::from(TransactionID::from(Hash::new_blake2b_512(seed).unwrap()));
+        let identity_id = IdentityID::from(TransactionID::from(Hash::new_blake3(seed).unwrap()));
         let fp = fingerprint(&identity_id).unwrap();
         println!("---\n{:?}", fp);
     }

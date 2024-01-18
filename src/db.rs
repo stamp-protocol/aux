@@ -8,8 +8,6 @@ use stamp_core::{
     identity::IdentityID,
     util::SerdeBinary,
 };
-use stamp_net::sync::TransactionMessageSigned;
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fs;
 
@@ -300,6 +298,7 @@ pub fn delete_staged_transaction(transaction_id: &TransactionID) -> Result<()> {
     Ok(())
 }
 
+/*
 /// Save a transaction from a private sync record
 pub fn save_sync_transaction(id_str: &str, transaction: TransactionMessageSigned) -> Result<TransactionMessageSigned> {
     ensure_schema()?;
@@ -359,4 +358,5 @@ pub fn find_sync_transactions(id_str: &str, exclude: &Vec<TransactionID>) -> Res
     }
     Ok(transactions)
 }
+*/
 

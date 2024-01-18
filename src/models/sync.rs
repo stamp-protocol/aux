@@ -13,6 +13,7 @@
 //! live on public/cloud servers and act as message-passers but don't have access
 //! to the data itself.
 
+/*
 use crate::{
     config::{self, NetConfig},
     db,
@@ -24,7 +25,7 @@ use stamp_core::{
     identity::{
         keychain::{Key},
     },
-    private::PrivateWithMac,
+    private::PrivateWithHmac,
     util::{Timestamp},
 };
 use stamp_net::{
@@ -40,9 +41,11 @@ use tracing::{debug, error, info, warn};
 
 /// Turns a secret key into a signing keypair.
 pub fn shared_key_to_sign_key(seckey: &SecretKey) -> Result<SignKeypair> {
-    let hash = Hash::new_blake2b_512_keyed(seckey.as_ref(), &[0][..], b"stamp-ksf", &[])?;
-    let seed: [u8; 32] = hash.as_bytes()[0..32].try_into().map_err(|_| Error::ConversionError)?;
-    Ok(SignKeypair::new_ed25519_from_seed(&seckey, &seed)?)
+    let hkdf = hkdf::SimpleHkdf::<blake2::Blake2b512>::new(None, seckey.as_ref());
+    let mut okm_seed = [0u8; 32];
+    hkdf.expand(b"stamp/hkdf", &mut okm_seed)
+        .map_err(|e| Error::KeygenFailed)?;
+    Ok(SignKeypair::new_ed25519_from_seed(&seckey, &okm_seed)?)
 }
 
 /// Turns a secret key into a sync channel (the channel is actually a base64
@@ -70,7 +73,7 @@ pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, hash_with:
     } else {
         let now = Timestamp::now();
         let secretkey = SecretKey::new_xchacha20poly1305()?;
-        let key = Key::new_secret(PrivateWithMac::seal(master_key, secretkey)?);
+        let key = Key::new_secret(PrivateWithHmac::seal(master_key, secretkey)?);
         let transaction = transactions
             .add_subkey(hash_with, now.clone(), key.clone(), "stamp/sync", Some("The key used for syncing your private identity between your devices"))?;
         (Some(transaction), key)
@@ -386,4 +389,5 @@ pub async fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, 
     events.await??;
     Ok(())
 }
+*/
 

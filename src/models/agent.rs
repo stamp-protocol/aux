@@ -1,3 +1,4 @@
+/*
 use axum::{
     routing::get,
     Router,
@@ -42,4 +43,5 @@ pub async fn run(port: u32, lock_after: u64, notifications: Sender<UIMessage>) -
         .map_err(axum::Error::new)?;
     Ok(())
 }
+*/
 

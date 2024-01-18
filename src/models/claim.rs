@@ -13,7 +13,7 @@ use crate::{
 use resolve::{DnsConfig, DnsResolver};
 use resolve::record::Txt;
 use stamp_core::{
-    crypto::base::{HashAlgo, SecretKey},
+    crypto::base::{HashAlgo, SecretKey, rng},
     dag::{Transaction, Transactions},
     identity::{
         IdentityID,
@@ -37,7 +37,8 @@ fn maybe_private<T>(master_key: &SecretKey, private: bool, value: T) -> Result<M
     where T: Clone + Encode + Decode,
 {
     let maybe = if private {
-        MaybePrivate::new_private(&master_key, value)?
+        let mut rng = rng::chacha20();
+        MaybePrivate::new_private(&mut rng, &master_key, value)?
     } else {
         MaybePrivate::new_public(value)
     };
