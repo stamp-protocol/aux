@@ -4,9 +4,12 @@ use crate::{
     error::{Error, Result},
 };
 use stamp_core::{
-    crypto::base::{
-        Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair,
-        rng,
+    crypto::{
+        base::{
+            Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair,
+            rng,
+        },
+        private::{PrivateWithHmac, MaybePrivate},
     },
     dag::{Transaction, TransactionBody, Transactions},
     identity::{
@@ -16,7 +19,6 @@ use stamp_core::{
         keychain::{ExtendKeypair, AdminKey, AdminKeypair, Key}
     },
     policy::{Capability, MultisigPolicy, Policy},
-    private::{PrivateWithHmac, MaybePrivate},
     util::{DeText, SerdeBinary, Timestamp},
 };
 use std::convert::TryFrom;

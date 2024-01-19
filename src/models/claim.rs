@@ -13,13 +13,15 @@ use crate::{
 use resolve::{DnsConfig, DnsResolver};
 use resolve::record::Txt;
 use stamp_core::{
-    crypto::base::{HashAlgo, SecretKey, rng},
+    crypto::{
+        base::{HashAlgo, SecretKey, rng},
+        private::MaybePrivate,
+    },
     dag::{Transaction, Transactions},
     identity::{
         IdentityID,
         claim::{Claim, ClaimSpec, Relationship, RelationshipType},
     },
-    private::MaybePrivate,
     rasn::{Encode, Decode},
     util::{Timestamp, Date, BinaryVec, Url},
 };
