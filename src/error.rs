@@ -71,10 +71,6 @@ pub enum Error {
     #[error("failed to set up logging")]
     LoggingInit,
 
-    /// StampNet error
-    #[error("StampNet error: {0}")]
-    Net(#[from] stamp_net::Error),
-
     /// Something was lost
     #[error("not found {0}")]
     NotFound(String),
