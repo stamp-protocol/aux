@@ -107,6 +107,12 @@ pub fn new_address(master_key: &SecretKey, transactions: &Transactions, hash_wit
     claim_post(transactions, hash_with, spec, name)
 }
 
+pub fn new_phone(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+    let maybe = maybe_private(&master_key, private, value)?;
+    let spec = ClaimSpec::PhoneNumber(maybe);
+    claim_post(transactions, hash_with, spec, name)
+}
+
 pub fn new_relation(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, reltype: RelationshipType, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
     let rel_id = IdentityID::try_from(value.as_str())?;
     let relationship = Relationship::new(reltype, rel_id);
