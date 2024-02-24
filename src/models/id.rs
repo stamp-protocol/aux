@@ -335,31 +335,6 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
 
     let mut points = vec![];
 
-    /*
-    // stretch a u8 into two u4, which conveniently allows for a 16x16 grid (what a coincidence)
-    let split_val = |val: u8| {
-        (val & 0xf, (val >> 4) & 0xf)
-    };
-    let mut idx = 0;
-    for h in id_bytes {
-        // turn our byte into two 16x16 x/y coords
-        let (x, y) = split_val(*h);
-        println!("x/y: {} {} ", x, y);
-        // grab a color from the color hash (NOT the data hash)
-        let color = hsl.disp(color_bytes[idx], None, None);
-        points.push((x, y, color.clone()));
-        if mirror_x {
-            points.push((15 - x, y, color.clone()));
-        }
-        if mirror_y {
-            points.push((x, 15 - y, color.clone()));
-        }
-        if mirror_x && mirror_y {
-            points.push((15 - x, 15 - y, color.clone()));
-        }
-        idx += 1;
-    }
-    */
     let truncate = 2;
     for i in 0..id_bytes.len() {
         let byte = id_bytes[i];
@@ -385,39 +360,6 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
             }
         }
     }
-    /*
-    let num_bits = id_bytes.len() * 8;
-    let num_bits_sqrt = (num_bits as f32).sqrt();
-    let scale = 256.0 / num_bits as f32;
-    for i in 0..id_bytes.len() {
-        let byte = id_bytes[i];
-        for bit in (0..8).rev() {
-            let on = (byte >> bit) & 1;
-            if on == 1 {
-                let bitnum = ((i * 8) + bit) as f32;
-                let y = ((bitnum / num_bits_sqrt) * (16.0 / num_bits_sqrt)) as u8;
-                let x = ((bitnum % num_bits_sqrt) * (16.0 / num_bits_sqrt)) as u8;
-                println!("x: (({} * {}) % 16) = {}", bitnum, scale, x);
-
-                let colorbits: u32 = ((color_bytes[i] as u32) << 8) + (color_bytes[(i + 1) % color_bytes.len()] as u32);
-                let colorbyte = ((colorbits << bit) & 0xFF00) >> 8;
-                let color = hsl.disp(colorbyte as u8, None, None);
-
-                points.push((x, y, color.clone()));
-                //println!("push: {} {} {:?}", x, y, color);
-                if mirror_x {
-                    points.push((15 - x, y, color.clone()));
-                }
-                if mirror_y {
-                    points.push((x, 15 - y, color.clone()));
-                }
-                if mirror_x && mirror_y {
-                    points.push((15 - x, 15 - y, color.clone()));
-                }
-            }
-        }
-    }
-    */
 
     Ok(points)
 }
