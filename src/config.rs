@@ -4,10 +4,7 @@ use crate::{
 };
 use std::{
     fs::File,
-    io::{
-        prelude::*,
-        BufReader,
-    },
+    io::{prelude::*, BufReader},
 };
 
 #[derive(Clone, Debug, Default, serde_derive::Serialize, serde_derive::Deserialize)]
@@ -33,18 +30,13 @@ pub fn load() -> Result<Config> {
             let mut reader = BufReader::new(file);
             let mut contents = String::new();
             reader.read_to_string(&mut contents)?;
-            let config: Config = toml::from_str(&contents)
-                .map_err(|_| Error::ConfigError)?;
+            let config: Config = toml::from_str(&contents).map_err(|_| Error::ConfigError)?;
             config
         }
-        Err(e) => {
-            match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    Config::default()
-                }
-                _ => Err(Error::ConfigError)?,
-            }
-        }
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::NotFound => Config::default(),
+            _ => Err(Error::ConfigError)?,
+        },
     };
     Ok(config)
 }
@@ -55,10 +47,8 @@ pub fn save(config: &Config) -> Result<()> {
     std::fs::create_dir_all(&data_dir)?;
     let mut config_file = data_dir.clone();
     config_file.push("config.toml");
-    let serialized = toml::to_string_pretty(config)
-        .map_err(|_| Error::ConfigError)?;
+    let serialized = toml::to_string_pretty(config).map_err(|_| Error::ConfigError)?;
     let mut handle = File::create(&config_file)?;
     handle.write_all(serialized.as_bytes())?;
     Ok(())
 }
-

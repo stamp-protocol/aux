@@ -15,7 +15,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, error};
 
 pub(crate) mod routes {
-    //pub(crate) fn get_owned_identities() -> 
+    //pub(crate) fn get_owned_identities() ->
 }
 
 /// Run the Stamp agent. This allows third-party applications to securely manage subkeys
@@ -44,4 +44,3 @@ pub async fn run(port: u32, lock_after: u64, notifications: Sender<UIMessage>) -
     Ok(())
 }
 */
-

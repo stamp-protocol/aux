@@ -86,7 +86,7 @@ pub fn gen_token(master_key: &SecretKey, transactions: &Transactions, hash_with:
 }
 
 /// Do two main things:
-/// 
+///
 /// 1. Take our join list, and override the list we have in our config if any are given
 /// (we make no attempt to merge them, it's either-or). Then save the list back into
 /// our config.
@@ -390,4 +390,3 @@ pub async fn listen(id_str: &str, channel: &str, shared_key: Option<SecretKey>, 
     Ok(())
 }
 */
-

@@ -1,22 +1,17 @@
 use crate::{
-    config,
-    db,
+    config, db,
     error::{Error, Result},
 };
 use stamp_core::{
     crypto::{
-        base::{
-            Hash, HashAlgo, SecretKey, SignKeypair, CryptoKeypair,
-            rng,
-        },
-        private::{PrivateWithHmac, MaybePrivate},
+        base::{rng, CryptoKeypair, Hash, HashAlgo, SecretKey, SignKeypair},
+        private::{MaybePrivate, PrivateWithHmac},
     },
     dag::{Transaction, TransactionBody, Transactions},
     identity::{
-        Identity,
-        IdentityID,
-        claim::{ClaimSpec},
-        keychain::{ExtendKeypair, AdminKey, AdminKeypair, Key}
+        claim::ClaimSpec,
+        keychain::{AdminKey, AdminKeypair, ExtendKeypair, Key},
+        Identity, IdentityID,
     },
     policy::{Capability, MultisigPolicy, Policy},
     util::{DeText, SerdeBinary, Timestamp},
@@ -38,7 +33,13 @@ pub fn sign_with_optimal_key(identity: &Identity, master_key: &SecretKey, transa
 }
 
 /// Set up a new identity with name, email, and randomly-generated subkeys.
-pub fn post_new_personal_id(master_key: &SecretKey, transactions: Transactions, hash_with: &HashAlgo, name: Option<String>, email: Option<String>) -> Result<Transactions> {
+pub fn post_new_personal_id(
+    master_key: &SecretKey,
+    transactions: Transactions,
+    hash_with: &HashAlgo,
+    name: Option<String>,
+    email: Option<String>,
+) -> Result<Transactions> {
     let mut rng = rng::chacha20();
     let subkey_sign = SignKeypair::new_ed25519(&mut rng, &master_key)?;
     let subkey_crypto = CryptoKeypair::new_curve25519xchacha20poly1305(&mut rng, &master_key)?;
@@ -97,7 +98,10 @@ pub fn create_personal_random(master_key: &SecretKey, hash_with: &HashAlgo, now:
     let admin = AdminKey::new(AdminKeypair::new_ed25519(&mut rng, &master_key)?, "alpha", Some("Your main admin key"));
     let policy = Policy::new(
         vec![Capability::Permissive],
-        MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
+        MultisigPolicy::MOfN {
+            must_have: 1,
+            participants: vec![admin.clone().into()],
+        },
     );
     let transactions = Transactions::new();
     let genesis = transactions
@@ -109,18 +113,21 @@ pub fn create_personal_random(master_key: &SecretKey, hash_with: &HashAlgo, now:
 
 /// Create a new vanity identity, where the resulting string ID matches a pre-
 /// determined pattern.
-pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, contains: Vec<&str>, prefix: Option<&str>, mut progress: F) -> Result<(SecretKey, Transactions, Timestamp)>
-    where F: FnMut(u64),
+pub fn create_personal_vanity<F>(
+    hash_with: &HashAlgo,
+    regex: Option<&str>,
+    contains: Vec<&str>,
+    prefix: Option<&str>,
+    mut progress: F,
+) -> Result<(SecretKey, Transactions, Timestamp)>
+where
+    F: FnMut(u64),
 {
     // we favor speed here, because we want this to be as fast as possible while still being
     // reasonably secure. so use 8 rounds instead of 20.
     let mut rng = rng::chacha8();
     let mut counter: u64 = 0;
-    let regex = if let Some(re) = regex {
-        Some(regex::Regex::new(re)?)
-    } else {
-        None
-    };
+    let regex = if let Some(re) = regex { Some(regex::Regex::new(re)?) } else { None };
     let mut filter = |id_str: &str| -> bool {
         counter += 1;
         if counter % 1000 == 0 {
@@ -153,7 +160,10 @@ pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, cont
         let admin = AdminKey::new(AdminKeypair::new_ed25519(&mut rng, &tmp_master_key)?, "alpha", Some("Your main admin key"));
         let policy = Policy::new(
             vec![Capability::Permissive],
-            MultisigPolicy::MOfN { must_have: 1, participants: vec![admin.clone().into()] },
+            MultisigPolicy::MOfN {
+                must_have: 1,
+                participants: vec![admin.clone().into()],
+            },
         );
         genesis_transaction = empty.create_identity(hash_with, now.clone(), vec![admin.clone()], vec![policy])?;
         let based = id_str!(genesis_transaction.id())?;
@@ -172,23 +182,19 @@ pub fn create_personal_vanity<F>(hash_with: &HashAlgo, regex: Option<&str>, cont
 /// if you want to go through with the import. Easy.
 pub fn import_pre(contents: &[u8]) -> Result<(Transactions, Option<Transactions>)> {
     // first try importing an owned identity
-    let imported = Transactions::deserialize_binary(contents)
-        .or_else(|_| {
-            let trans = match Transaction::deserialize_binary(contents) {
-                Ok(trans) => trans,
-                Err(_) => {
-                    let yaml = String::from_utf8(Vec::from(contents))
-                        .map_err(|_| Error::DeserializeFailure)?;
-                    Transaction::deserialize_text(&yaml)?
-                }
-            };
-            match trans.entry().body() {
-                TransactionBody::PublishV1 { transactions } => {
-                    Ok(*(transactions.clone()))
-                }
-                _ => Err(Error::DeserializeFailure),
+    let imported = Transactions::deserialize_binary(contents).or_else(|_| {
+        let trans = match Transaction::deserialize_binary(contents) {
+            Ok(trans) => trans,
+            Err(_) => {
+                let yaml = String::from_utf8(Vec::from(contents)).map_err(|_| Error::DeserializeFailure)?;
+                Transaction::deserialize_text(&yaml)?
             }
-        })?;
+        };
+        match trans.entry().body() {
+            TransactionBody::PublishV1 { transactions } => Ok(*(transactions.clone())),
+            _ => Err(Error::DeserializeFailure),
+        }
+    })?;
     let identity = imported.build_identity()?;
     let exists = db::load_identity(identity.id())?;
     if let Some(existing) = exists.as_ref() {
@@ -239,9 +245,7 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
             // so if we have a hue value of, say 0 we snap to -11 which is really
             // 245 (instead of 23) because it's closer to the hue we want (because it
             // wraps)
-            let mut h_grav_mod = h_grav_initial.into_iter()
-                .map(|x| (x % 256) as i16)
-                .collect::<Vec<i16>>();
+            let mut h_grav_mod = h_grav_initial.into_iter().map(|x| (x % 256) as i16).collect::<Vec<i16>>();
             h_grav_mod.sort();
             let mut h_grav = Vec::with_capacity(h_grav_mod.len() + 2);
             if let Some(last) = h_grav_mod.last() {
@@ -273,11 +277,11 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
                     } else {
                         t
                     };
-                    if t < (1.0/6.0) {
+                    if t < (1.0 / 6.0) {
                         return p + (q - p) * 6.0 * t;
-                    } else if t < (1.0/2.0) {
+                    } else if t < (1.0 / 2.0) {
                         return q;
-                    } else if t < (2.0/3.0) {
+                    } else if t < (2.0 / 3.0) {
                         return p + (q - p) * ((2.0 / 3.0) - t) * 6.0;
                     } else {
                         return p;
@@ -286,22 +290,16 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
                 let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
                 let p = 2.0 * l - q;
                 let one_third = 1.0 / 3.0;
-                (
-                    hue_to_rgb(p, q, h + one_third),
-                    hue_to_rgb(p, q, h),
-                    hue_to_rgb(p, q, h - one_third),
-                )
+                (hue_to_rgb(p, q, h + one_third), hue_to_rgb(p, q, h), hue_to_rgb(p, q, h - one_third))
             };
-            return [
-                (r * 255.0).round() as u8,
-                (g * 255.0).round() as u8,
-                (b * 255.0).round() as u8,
-            ];
+            return [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
         }
 
         fn disp(&self, h: u8, s: Option<f32>, l: Option<f32>) -> [u8; 3] {
             // snap to a predetermined hue value by distance
-            let mut gravved = self.h_grav.iter()
+            let mut gravved = self
+                .h_grav
+                .iter()
                 .map(|(g, rgb_precomp)| (g, (h as i16 - g).abs(), rgb_precomp))
                 .collect::<Vec<_>>();
             gravved.sort_by_key(|x| x.1);
@@ -366,7 +364,8 @@ pub fn fingerprint(identity_id: &IdentityID) -> Result<Vec<(u8, u8, [u8; 3])>> {
 
 /// Takes an identity [`fingerprint`] and turns it into a pretty SVG.
 pub fn fingerprint_to_svg(fingerprint: &Vec<(u8, u8, [u8; 3])>) -> String {
-    let mut lines: Vec<String> = vec![r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" style="background-color: #000000;">"#.into()];
+    let mut lines: Vec<String> =
+        vec![r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" style="background-color: #000000;">"#.into()];
     for (x, y, rgb) in fingerprint {
         let hex = format!("{:02x?}{:02x?}{:02x?}", rgb[0], rgb[1], rgb[2]);
         lines.push(format!(r#"<rect x="{}" y="{}" width="16" height="16" style="fill: #{};" />"#, x * 16, y * 16, hex));
@@ -429,10 +428,7 @@ pub fn view(search: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stamp_core::{
-        crypto::base::Hash,
-        dag::{TransactionID},
-    };
+    use stamp_core::{crypto::base::Hash, dag::TransactionID};
 
     #[test]
     fn fingerprint_svg() {
@@ -442,4 +438,3 @@ mod tests {
         println!("---\n{:?}", fp);
     }
 }
-

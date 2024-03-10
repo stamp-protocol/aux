@@ -7,23 +7,21 @@
 //! the claim information is posted somewhere publicly in a location of a
 //! system in which we know the protocol. Think, HTTP/DNS.
 
-use crate::{
-    error::{Error, Result},
-};
-use resolve::{DnsConfig, DnsResolver};
+use crate::error::{Error, Result};
 use resolve::record::Txt;
+use resolve::{DnsConfig, DnsResolver};
 use stamp_core::{
     crypto::{
-        base::{HashAlgo, SecretKey, rng},
+        base::{rng, HashAlgo, SecretKey},
         private::MaybePrivate,
     },
     dag::{Transaction, Transactions},
     identity::{
-        IdentityID,
         claim::{Claim, ClaimSpec, Relationship, RelationshipType},
+        IdentityID,
     },
-    rasn::{Encode, Decode},
-    util::{Timestamp, Date, BinaryVec, Url},
+    rasn::{Decode, Encode},
+    util::{BinaryVec, Date, Timestamp, Url},
 };
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -36,7 +34,8 @@ fn claim_post(transactions: &Transactions, hash_with: &HashAlgo, spec: ClaimSpec
 }
 
 fn maybe_private<T>(master_key: &SecretKey, private: bool, value: T) -> Result<MaybePrivate<T>>
-    where T: Clone + Encode + Decode,
+where
+    T: Clone + Encode + Decode,
 {
     let maybe = if private {
         let mut rng = rng::chacha20();
@@ -47,73 +46,155 @@ fn maybe_private<T>(master_key: &SecretKey, private: bool, value: T) -> Result<M
     Ok(maybe)
 }
 
-pub fn new_id(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_id(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let id = IdentityID::try_from(value.as_str())?;
     let maybe = maybe_private(&master_key, private, id)?;
     let spec = ClaimSpec::Identity(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_name(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_name(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Name(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_birthday(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_birthday(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let dob = Date::from_str(&value)?;
     let maybe = maybe_private(&master_key, private, dob)?;
     let spec = ClaimSpec::Birthday(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_email(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_email(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Email(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_photo(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, photo_bytes: Vec<u8>, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_photo(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    photo_bytes: Vec<u8>,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     if photo_bytes.len() > MAX_PHOTO_BYTES {
-        Err(Error::TooBig(format!("Please choose a photo smaller than {} bytes (given photo is {} bytes)", MAX_PHOTO_BYTES, photo_bytes.len())))?;
+        Err(Error::TooBig(format!(
+            "Please choose a photo smaller than {} bytes (given photo is {} bytes)",
+            MAX_PHOTO_BYTES,
+            photo_bytes.len()
+        )))?;
     }
     let maybe = maybe_private(&master_key, private, BinaryVec::from(photo_bytes))?;
     let spec = ClaimSpec::Photo(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_pgp(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_pgp(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Pgp(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_domain(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_domain(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value.clone())?;
     let spec = ClaimSpec::Domain(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_url(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_url(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let url = Url::parse(&value)?;
     let maybe = maybe_private(&master_key, private, url)?;
     let spec = ClaimSpec::Url(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_address(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_address(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::Address(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_phone(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_phone(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let maybe = maybe_private(&master_key, private, value)?;
     let spec = ClaimSpec::PhoneNumber(maybe);
     claim_post(transactions, hash_with, spec, name)
 }
 
-pub fn new_relation(master_key: &SecretKey, transactions: &Transactions, hash_with: &HashAlgo, reltype: RelationshipType, value: String, private: bool, name: Option<&str>) -> Result<Transaction> {
+pub fn new_relation(
+    master_key: &SecretKey,
+    transactions: &Transactions,
+    hash_with: &HashAlgo,
+    reltype: RelationshipType,
+    value: String,
+    private: bool,
+    name: Option<&str>,
+) -> Result<Transaction> {
     let rel_id = IdentityID::try_from(value.as_str())?;
     let relationship = Relationship::new(reltype, rel_id);
     let maybe = maybe_private(&master_key, private, relationship)?;
@@ -162,7 +243,9 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
     let instant_values = claim.instant_verify_allowed_values(identity_id)?;
     match claim.spec() {
         ClaimSpec::Domain(maybe) => {
-            let domain = maybe.open_public().ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
+            let domain = maybe
+                .open_public()
+                .ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
             let config = DnsConfig::load_default()?;
             let resolver = DnsResolver::new(config)?;
             let records = resolver.resolve_record::<Txt>(&domain)?;
@@ -182,25 +265,34 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
             if found {
                 Ok(domain)
             } else {
-                Err(Error::ClaimCheckFail(format!("The domain {} does not contain any of the required values for verification", domain)))
+                Err(Error::ClaimCheckFail(format!(
+                    "The domain {} does not contain any of the required values for verification",
+                    domain
+                )))
             }
         }
         ClaimSpec::Url(maybe) => {
-            let url = maybe.open_public().ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
+            let url = maybe
+                .open_public()
+                .ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
             let body = ureq::get(&String::from(url.clone()))
                 .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .set("Accept-Language", "en-US,en;q=0.5")
                 .set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:84.0) Gecko/20100101 Firefox/84.0")
                 .call()
-                .map_err(|e| {
-                    match e {
-                        ureq::Error::Status(code, res) => {
-                            let res_str = res.into_string()
-                                .unwrap_or_else(|e| format!("Could not map error response to string: {:?}", e));
-                            Error::ClaimCheckFail(format!("Problem calling GET on {}: {} -- {}", url, code, &res_str[0..std::cmp::min(100, res_str.len())]))
-                        },
-                        _ => Error::ClaimCheckFail(format!("Problem calling GET on {}: {}", url, e))
+                .map_err(|e| match e {
+                    ureq::Error::Status(code, res) => {
+                        let res_str = res
+                            .into_string()
+                            .unwrap_or_else(|e| format!("Could not map error response to string: {:?}", e));
+                        Error::ClaimCheckFail(format!(
+                            "Problem calling GET on {}: {} -- {}",
+                            url,
+                            code,
+                            &res_str[0..std::cmp::min(100, res_str.len())]
+                        ))
                     }
+                    _ => Error::ClaimCheckFail(format!("Problem calling GET on {}: {}", url, e)),
                 })?
                 .into_string()
                 .map_err(|e| Error::ClaimCheckFail(format!("Problem grabbing output of {}: {}", url, e)))?;
@@ -214,10 +306,12 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
             if found {
                 Ok(url.into())
             } else {
-                Err(Error::ClaimCheckFail(format!("The URL {} does not contain any of the required values for verification", url)))
+                Err(Error::ClaimCheckFail(format!(
+                    "The URL {} does not contain any of the required values for verification",
+                    url
+                )))
             }
         }
         _ => Err(Error::ClaimCheckFail(format!("Claim checking is only available for domain or URL claim types.")))?,
     }
 }
-

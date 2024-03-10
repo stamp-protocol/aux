@@ -18,9 +18,7 @@ fn conn() -> Result<Connection> {
     let mut db_file = dir.clone();
     db_file.push("db.sqlite");
     let flags =
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE |
-        rusqlite::OpenFlags::SQLITE_OPEN_CREATE |
-        rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(&db_file, flags)?;
     Ok(conn)
 }
@@ -32,10 +30,19 @@ pub fn ensure_schema() -> Result<()> {
     conn.execute("CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, created TEXT NOT NULL, data BLOB NOT NULL, name_lookup JSON, email_lookup JSON, claim_lookup JSON, stamp_lookup JSON)", params![])?;
     // holds transactions that require multiple signatures
     conn.execute("CREATE TABLE IF NOT EXISTS staged_transactions (id TEXT PRIMARY KEY, identity_id TEXT NOT NULL, created TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS staged_transactions_identity ON staged_transactions (identity_id)", params![])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS staged_transactions_identity ON staged_transactions (identity_id)",
+        params![],
+    )?;
     // holds transactions for private syncing
-    conn.execute("CREATE TABLE IF NOT EXISTS sync_transactions (transaction_id TEXT PIMARY KEY, identity_id TEXT NOT NULL, data BLOB NOT NULL)", params![])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS sync_transactions_identity ON sync_transactions (identity_id)", params![])?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sync_transactions (transaction_id TEXT PIMARY KEY, identity_id TEXT NOT NULL, data BLOB NOT NULL)",
+        params![],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS sync_transactions_identity ON sync_transactions (identity_id)",
+        params![],
+    )?;
     Ok(())
 }
 
@@ -53,13 +60,11 @@ pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
 
     let name_lookup = identity.names();
     let email_lookup = identity.emails();
-    let claim_lookup = identity.claims().iter()
-        .map(|x| id_str!(x.id()))
-        .collect::<Result<Vec<String>>>()?;
-    let stamp_lookup = identity.claims().iter()
-        .map(|x| {
-            x.stamps().iter().map(|x| { id_str!(x.id()) })
-        })
+    let claim_lookup = identity.claims().iter().map(|x| id_str!(x.id())).collect::<Result<Vec<String>>>()?;
+    let stamp_lookup = identity
+        .claims()
+        .iter()
+        .map(|x| x.stamps().iter().map(|x| id_str!(x.id())))
         .flatten()
         .collect::<Result<Vec<String>>>()?;
 
@@ -82,7 +87,7 @@ pub fn save_identity(transactions: Transactions) -> Result<Transactions> {
             json_arr(&email_lookup),
             json_arr(&claim_lookup),
             json_arr(&stamp_lookup),
-        ]
+        ],
     )?;
     conn.execute("COMMIT", params![])?;
     Ok(transactions)
@@ -93,11 +98,7 @@ pub fn load_identity(id: &IdentityID) -> Result<Option<Transactions>> {
     ensure_schema()?;
     let conn = conn()?;
     let id_str = id_str!(id)?;
-    let qry_res = conn.query_row(
-        "SELECT data FROM identities WHERE id = ?1 ORDER BY created ASC",
-        params![id_str],
-        |row| row.get(0)
-    );
+    let qry_res = conn.query_row("SELECT data FROM identities WHERE id = ?1 ORDER BY created ASC", params![id_str], |row| row.get(0));
     let blob: Option<Vec<u8>> = match qry_res {
         Ok(blob) => Some(blob),
         Err(rusqlite::Error::QueryReturnedNoRows) => None,
@@ -174,7 +175,8 @@ pub fn list_local_identities(search: Option<&str>) -> Result<Vec<Transactions>> 
 pub fn find_identity_by_prefix(ty: &str, id_prefix: &str) -> Result<Option<Transactions>> {
     ensure_schema()?;
     let conn = conn()?;
-    let qry = format!(r#"
+    let qry = format!(
+        r#"
         SELECT DISTINCT
             i.id, i.data
         FROM
@@ -184,14 +186,12 @@ pub fn find_identity_by_prefix(ty: &str, id_prefix: &str) -> Result<Option<Trans
             jcl.value LIKE ?1
         ORDER BY
             i.created ASC
-    "#, ty);
+    "#,
+        ty
+    );
 
     let finder = format!("{}%", id_prefix);
-    let qry_res = conn.query_row(
-        &qry,
-        params![finder],
-        |row| row.get(1)
-    );
+    let qry_res = conn.query_row(&qry, params![finder], |row| row.get(1));
     let blob: Option<Vec<u8>> = match qry_res {
         Ok(blob) => Some(blob),
         Err(rusqlite::Error::QueryReturnedNoRows) => None,
@@ -220,8 +220,7 @@ pub fn delete_identity(id: &str) -> Result<()> {
 pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> Result<Transaction> {
     ensure_schema()?;
     let id_str = id_str!(identity_id)?;
-    let transaction_id = String::try_from(transaction.id())
-        .map_err(|_| Error::ConversionError)?;
+    let transaction_id = String::try_from(transaction.id()).map_err(|_| Error::ConversionError)?;
     let serialized = transaction.serialize_binary()?;
     let created = format!("{}", transaction.entry().created().format("%+"));
     let conn = conn()?;
@@ -235,7 +234,7 @@ pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> 
             UPDATE SET
                 data = ?4
         "#,
-        params![transaction_id, id_str, created, serialized]
+        params![transaction_id, id_str, created, serialized],
     )?;
     Ok(transaction)
 }
@@ -243,13 +242,12 @@ pub fn stage_transaction(identity_id: &IdentityID, transaction: Transaction) -> 
 /// Load a staged transaction by its id.
 pub fn load_staged_transaction(transaction_id: &TransactionID) -> Result<Option<(IdentityID, Transaction)>> {
     ensure_schema()?;
-    let transaction_id_str = String::try_from(transaction_id)
-        .map_err(|_| Error::ConversionError)?;
+    let transaction_id_str = String::try_from(transaction_id).map_err(|_| Error::ConversionError)?;
     let conn = conn()?;
     let res = conn.query_row(
         r#"SELECT identity_id, data FROM staged_transactions WHERE id = ?1"#,
         params![transaction_id_str],
-        |row| row.get(0).and_then(|id| row.get(1).and_then(|blob| Ok((id, blob))))
+        |row| row.get(0).and_then(|id| row.get(1).and_then(|blob| Ok((id, blob)))),
     );
     let found: Option<(String, Vec<u8>)> = match res {
         Ok((id_str, blob)) => Some((id_str, blob)),
@@ -258,8 +256,7 @@ pub fn load_staged_transaction(transaction_id: &TransactionID) -> Result<Option<
     };
     match found {
         Some((id_str, data)) => {
-            let identity_id = IdentityID::try_from(id_str.as_str())
-                .map_err(|_| Error::ConversionError)?;
+            let identity_id = IdentityID::try_from(id_str.as_str()).map_err(|_| Error::ConversionError)?;
             let transaction = Transaction::deserialize_binary(data.as_slice())?;
             Ok(Some((identity_id, transaction)))
         }
@@ -272,13 +269,12 @@ pub fn find_staged_transactions(identity_id: &IdentityID) -> Result<Vec<Transact
     ensure_schema()?;
     let id_str = id_str!(identity_id)?;
     let conn = conn()?;
-    let mut stmt = conn.prepare(r#"
+    let mut stmt = conn.prepare(
+        r#"
         SELECT data FROM staged_transactions WHERE identity_id = ?1
-    "#)?;
-    let rows = stmt.query_map(
-        params![id_str],
-        |row: &rusqlite::Row<'_>| -> rusqlite::Result<_> { row.get(0) }
+    "#,
     )?;
+    let rows = stmt.query_map(params![id_str], |row: &rusqlite::Row<'_>| -> rusqlite::Result<_> { row.get(0) })?;
     let mut transactions = Vec::new();
     for data in rows {
         let data_bin: Vec<u8> = data?;
@@ -291,8 +287,7 @@ pub fn find_staged_transactions(identity_id: &IdentityID) -> Result<Vec<Transact
 /// Delete a staged transaction.
 pub fn delete_staged_transaction(transaction_id: &TransactionID) -> Result<()> {
     ensure_schema()?;
-    let transaction_id_str = String::try_from(transaction_id)
-        .map_err(|_| Error::ConversionError)?;
+    let transaction_id_str = String::try_from(transaction_id).map_err(|_| Error::ConversionError)?;
     let conn = conn()?;
     conn.execute(r#"DELETE FROM staged_transactions WHERE id = ?1"#, params![transaction_id_str])?;
     Ok(())
@@ -359,4 +354,3 @@ pub fn find_sync_transactions(id_str: &str, exclude: &Vec<TransactionID>) -> Res
     Ok(transactions)
 }
 */
-

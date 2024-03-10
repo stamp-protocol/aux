@@ -106,5 +106,3 @@ pub enum Error {
 
 /// Wraps `std::result::Result` around our `Error` enum
 pub type Result<T> = std::result::Result<T, Error>;
-
-
