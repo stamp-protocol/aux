@@ -2,6 +2,7 @@ use crate::{
     error::{Error, Result},
     util,
 };
+use stamp_net::Multiaddr;
 use std::{
     fs::File,
     io::{prelude::*, BufReader},
@@ -9,7 +10,13 @@ use std::{
 
 #[derive(Clone, Debug, Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct NetConfig {
-    pub join_list: Vec<String>,
+    pub join_list: Vec<Multiaddr>,
+}
+
+impl NetConfig {
+    pub fn new(join_list: Vec<Multiaddr>) -> Self {
+        Self { join_list }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde_derive::Serialize, serde_derive::Deserialize)]

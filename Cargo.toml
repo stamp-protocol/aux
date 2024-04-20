@@ -12,10 +12,11 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "3.0"
 regex = "1.4"
 resolve = "0.2"
-rusqlite = { version = "0.24", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde = "1.0"
 serde_derive = "1.0"
 stamp-core = { path = "../core" }
+stamp-net = { path = "../net" }
 thiserror = "1.0"
 toml = "0.5"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
