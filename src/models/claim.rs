@@ -7,7 +7,10 @@
 //! the claim information is posted somewhere publicly in a location of a
 //! system in which we know the protocol. Think, HTTP/DNS.
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    util,
+};
 use resolve::record::Txt;
 use resolve::{DnsConfig, DnsResolver};
 use stamp_core::{
@@ -275,27 +278,8 @@ pub fn check_claim(transactions: &Transactions, claim: &Claim) -> Result<String>
             let url = maybe
                 .open_public()
                 .ok_or(Error::ClaimCheckFail(format!("This claim is private, but must be public to be checked.")))?;
-            let body = ureq::get(&String::from(url.clone()))
-                .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .set("Accept-Language", "en-US,en;q=0.5")
-                .set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:84.0) Gecko/20100101 Firefox/84.0")
-                .call()
-                .map_err(|e| match e {
-                    ureq::Error::Status(code, res) => {
-                        let res_str = res
-                            .into_string()
-                            .unwrap_or_else(|e| format!("Could not map error response to string: {:?}", e));
-                        Error::ClaimCheckFail(format!(
-                            "Problem calling GET on {}: {} -- {}",
-                            url,
-                            code,
-                            &res_str[0..std::cmp::min(100, res_str.len())]
-                        ))
-                    }
-                    _ => Error::ClaimCheckFail(format!("Problem calling GET on {}: {}", url, e)),
-                })?
-                .into_string()
-                .map_err(|e| Error::ClaimCheckFail(format!("Problem grabbing output of {}: {}", url, e)))?;
+            let body = util::http_get(&String::from(url.clone()))
+                .map_err(|e| Error::ClaimCheckFail(format!("Problem reading claim URL {}: {}", url, e)))?;
             let mut found = false;
             for val in instant_values {
                 if body.contains(&val) {

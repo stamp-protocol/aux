@@ -51,6 +51,10 @@ pub enum Error {
     #[error("HTTP server error: {0}")]
     Http(#[from] axum::Error),
 
+    /// HTTP GET errrrorooooooorrr
+    #[error("HTTP client error: {0}")]
+    HttpGet(String),
+
     /// Expected exactly one identity, found multiple
     #[error("expected exactly one identity with id {0} but found multiple")]
     IdentityCollision(String),

@@ -57,6 +57,30 @@ pub fn load_file(filename: &str) -> Result<Vec<u8>> {
     Ok(contents)
 }
 
+pub fn http_get(url: &str) -> Result<String> {
+    let res = ureq::get(url)
+        .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .set("Accept-Language", "en-US,en;q=0.5")
+        .set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:84.0) Gecko/20100101 Firefox/84.0")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(code, res) => {
+                let res_str = res
+                    .into_string()
+                    .unwrap_or_else(|e| format!("Could not map error response to string: {:?}", e));
+                Error::HttpGet(format!(
+                    "Problem calling GET on {}: {} -- {}",
+                    url,
+                    code,
+                    &res_str[0..std::cmp::min(100, res_str.len())]
+                ))
+            }
+            _ => Error::HttpGet(format!("Problem calling GET on {}: {}", url, e)),
+        })?
+        .into_string();
+    Ok(res?)
+}
+
 #[macro_export]
 macro_rules! id_str {
     ($id:expr) => {
